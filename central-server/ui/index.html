@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pacemaker Central</title>
+  <link rel="manifest" href="/ui/manifest.json">
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <div id="app" x-data="app()" x-init="init()">
+
+    <!-- ── Navigation ── -->
+    <nav class="nav">
+      <div class="nav-inner">
+        <div class="nav-brand">
+          <svg width="32" height="20" viewBox="0 0 32 20" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M0 10 L5 10 L7 5 L9 15 L11 2 L13 18 L15 10 L18 10 L20 7 L22 10 L32 10"/>
+          </svg>
+          Pacemaker Central
+        </div>
+        <div class="nav-links">
+          <a href="#/"        :class="page==='dashboard'    ? 'active' : ''">Dashboard</a>
+          <a href="#/devices" :class="page==='devices' || page==='device-detail' ? 'active' : ''">Devices</a>
+          <a href="#/jobs"    :class="page==='jobs'         ? 'active' : ''">Jobs</a>
+          <a href="/ca.crt" class="nav-ca-link" title="Install CA certificate to trust HTTPS">&#x1F512; Trust cert</a>
+        </div>
+      </div>
+    </nav>
+
+    <main class="page">
+
+      <!-- ══════════════════════════════════════════
+           DASHBOARD
+      ══════════════════════════════════════════ -->
+      <div x-show="page === 'dashboard'">
+        <div class="page-header">
+          <h2>Dashboard</h2>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon teal">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+              </svg>
+            </div>
+            <div>
+              <div class="stat-value" x-text="stats.interrogations_total ?? '—'"></div>
+              <div class="stat-label">Interrogations</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon blue">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <path d="M8 21h8M12 17v4"/>
+              </svg>
+            </div>
+            <div>
+              <div class="stat-value" x-text="stats.devices_known ?? '—'"></div>
+              <div class="stat-label">Known Devices</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon slate">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+            </div>
+            <div>
+              <div class="stat-value" x-text="stats.jobs_total ?? '—'"></div>
+              <div class="stat-label">Total Jobs</div>
+            </div>
+          </div>
+          <div class="stat-card" :class="stats.jobs_pending > 0 ? 'alert' : ''">
+            <div class="stat-icon amber">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </div>
+            <div>
+              <div class="stat-value" x-text="stats.jobs_pending ?? '—'"></div>
+              <div class="stat-label">Pending Parse</div>
+            </div>
+          </div>
+        </div>
+
+        <h3>Recent Interrogations</h3>
+        <div x-show="recentInterrogations.length === 0" class="empty">No interrogations yet.</div>
+        <div class="table-wrap" x-show="recentInterrogations.length > 0">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Patient</th>
+                <th>Device</th>
+                <th>Battery</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="r in recentInterrogations" :key="r.id">
+                <tr>
+                  <td>
+                    <input type="date"
+                      x-init="$el.value = r.interrogation_date || todayISO()"
+                      @change="patchDate(r.id, $event.target.value)">
+                  </td>
+                  <td x-text="r.patient_id ?? '—'"></td>
+                  <td>
+                    <a :href="'#/devices/' + r.device_serial" x-text="r.device_serial ?? '—'"></a>
+                  </td>
+                  <td>
+                    <span :class="batteryClass(r.battery_voltage)"
+                          x-text="r.battery_voltage != null ? r.battery_voltage + ' V' : '—'"></span>
+                  </td>
+                  <td><a :href="'#/interrogations/' + r.id">Detail &rsaquo;</a></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════
+           DEVICES LIST
+      ══════════════════════════════════════════ -->
+      <div x-show="page === 'devices'">
+        <div class="page-header"><h2>Devices</h2></div>
+        <div x-show="devices.length === 0" class="empty">No devices registered yet.</div>
+        <div class="table-wrap" x-show="devices.length > 0">
+          <table>
+            <thead>
+              <tr>
+                <th>Serial</th>
+                <th>Model</th>
+                <th>Vendor</th>
+                <th>Patient</th>
+                <th>Last seen</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="d in devices" :key="d.device_serial">
+                <tr>
+                  <td><code x-text="d.device_serial"></code></td>
+                  <td x-text="d.device_model ?? '—'"></td>
+                  <td><span class="vendor-tag" x-text="d.vendor"></span></td>
+                  <td x-text="d.patient_name ?? d.patient_id ?? '—'"></td>
+                  <td x-text="fmtDate(d.updated_at)"></td>
+                  <td><a :href="'#/devices/' + d.device_serial">History &rsaquo;</a></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════
+           DEVICE DETAIL
+      ══════════════════════════════════════════ -->
+      <div x-show="page === 'device-detail'">
+        <a href="#/devices" class="back-link">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          Devices
+        </a>
+        <div class="page-header">
+          <h2>Device <code x-text="deviceDetail.serial"></code></h2>
+        </div>
+
+        <template x-if="deviceDetail.info">
+          <div class="meta-bar">
+            <div class="meta-field">
+              <div class="meta-field-label">Model</div>
+              <div class="meta-field-value" x-text="deviceDetail.info.device_model ?? '—'"></div>
+            </div>
+            <div class="meta-field">
+              <div class="meta-field-label">Vendor</div>
+              <div class="meta-field-value"><span class="vendor-tag" x-text="deviceDetail.info.vendor"></span></div>
+            </div>
+            <div class="meta-field">
+              <div class="meta-field-label">Patient</div>
+              <div class="meta-field-value" x-text="deviceDetail.info.patient_name ?? deviceDetail.info.patient_id ?? '—'"></div>
+            </div>
+          </div>
+        </template>
+
+        <h3>Interrogation History</h3>
+        <div x-show="deviceDetail.interrogations.length === 0" class="empty">No interrogations for this device.</div>
+        <div class="table-wrap" x-show="deviceDetail.interrogations.length > 0">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Battery</th>
+                <th>Longevity</th>
+                <th>RV Imp.</th>
+                <th>RA Imp.</th>
+                <th>LV Imp.</th>
+                <th>RV Sense</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="r in deviceDetail.interrogations" :key="r.id">
+                <tr>
+                  <td>
+                    <input type="date"
+                      x-init="$el.value = r.interrogation_date || todayISO()"
+                      @change="patchDate(r.id, $event.target.value)">
+                  </td>
+                  <td>
+                    <span :class="batteryClass(r.battery_voltage)"
+                          x-text="r.battery_voltage != null ? r.battery_voltage + ' V' : '—'"></span>
+                  </td>
+                  <td x-text="r.battery_longevity ?? '—'"></td>
+                  <td>
+                    <span :class="impedanceClass(r.impedance_rv)"
+                          x-text="r.impedance_rv != null ? r.impedance_rv + ' Ω' : '—'"></span>
+                  </td>
+                  <td x-text="r.impedance_ra != null ? r.impedance_ra + ' Ω' : '—'"></td>
+                  <td x-text="r.impedance_lv != null ? r.impedance_lv + ' Ω' : '—'"></td>
+                  <td x-text="r.sensing_rv != null ? r.sensing_rv + ' mV' : '—'"></td>
+                  <td><a :href="'#/interrogations/' + r.id">Detail &rsaquo;</a></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════════
+           INTERROGATION DETAIL
+      ══════════════════════════════════════════ -->
+      <div x-show="page === 'interrogation-detail'">
+        <a x-show="interrDetail && interrDetail.device_serial"
+           :href="'#/devices/' + (interrDetail && interrDetail.device_serial)" class="back-link">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          Device
+        </a>
+        <a x-show="!interrDetail || !interrDetail.device_serial" href="#/" class="back-link">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          Dashboard
+        </a>
+        <div class="page-header"><h2>Interrogation</h2></div>
+
+        <template x-if="interrDetail">
+          <div>
+            <!-- Patient banner (full width) -->
+            <div class="patient-banner">
+              <div class="patient-field">
+                <div class="patient-field-label">Patient ID</div>
+                <div class="patient-field-value" x-text="interrDetail.patient_id ?? '—'"></div>
+              </div>
+              <div class="patient-field">
+                <div class="patient-field-label">Device Serial</div>
+                <div class="patient-field-value"><code x-text="interrDetail.device_serial ?? '—'"></code></div>
+              </div>
+              <div class="patient-field">
+                <div class="patient-field-label">Model</div>
+                <div class="patient-field-value" x-text="interrDetail.device_model ?? '—'"></div>
+              </div>
+              <div class="patient-field">
+                <div class="patient-field-label">Date</div>
+                <div class="patient-field-value">
+                  <input type="date"
+                    x-effect="$el.value = interrDetail.interrogation_date || todayISO()"
+                    @change="patchDate(interrDetail.id, $event.target.value)"
+                    style="background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.25);width:140px;">
+                </div>
+              </div>
+            </div>
+
+            <!-- Two-column: extracted values left, document right -->
+            <div class="detail-layout">
+
+              <!-- LEFT: extracted values -->
+              <div class="detail-left">
+                <!-- CardioPal QR codes -->
+                <div class="qr-panel">
+                  <div class="qr-panel-title">CardioPal QR Codes</div>
+                  <div class="qr-row">
+                    <div class="qr-item">
+                      <div class="qr-label">Nachsorge</div>
+                      <img :src="'/api/interrogations/' + interrDetail.id + '/qr/followup'"
+                           width="200" height="200" alt="Follow-up QR">
+                    </div>
+                    <div class="qr-item">
+                      <div class="qr-label">Parameter</div>
+                      <img :src="'/api/interrogations/' + interrDetail.id + '/qr/params'"
+                           width="200" height="200" alt="Parameters QR"
+                           @error="$el.closest('.qr-item').style.display='none'">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Clinical parameters -->
+                <h3>Clinical Parameters</h3>
+                <div class="field-grid">
+                  <div class="field-section">
+                    <h4>Battery</h4>
+                    <dl>
+                      <dt>Voltage</dt>
+                      <dd>
+                        <span :class="batteryClass(interrDetail.battery_voltage)"
+                              x-text="interrDetail.battery_voltage != null ? interrDetail.battery_voltage + ' V' : '—'"></span>
+                      </dd>
+                      <dt>Longevity</dt>
+                      <dd x-text="interrDetail.battery_longevity ?? '—'"></dd>
+                    </dl>
+                  </div>
+
+                  <div class="field-section">
+                    <h4>Lead Impedance</h4>
+                    <dl>
+                      <dt>RV</dt>
+                      <dd>
+                        <span :class="impedanceClass(interrDetail.impedance_rv)"
+                              x-text="interrDetail.impedance_rv != null ? interrDetail.impedance_rv + ' Ω' : '—'"></span>
+                      </dd>
+                      <dt>RA</dt>
+                      <dd x-text="interrDetail.impedance_ra != null ? interrDetail.impedance_ra + ' Ω' : '—'"></dd>
+                      <dt>LV</dt>
+                      <dd x-text="interrDetail.impedance_lv != null ? interrDetail.impedance_lv + ' Ω' : '—'"></dd>
+                    </dl>
+                  </div>
+
+                  <div class="field-section">
+                    <h4>Sensing</h4>
+                    <dl>
+                      <dt>RV</dt>
+                      <dd x-text="interrDetail.sensing_rv != null ? interrDetail.sensing_rv + ' mV' : '—'"></dd>
+                      <dt>RA</dt>
+                      <dd x-text="interrDetail.sensing_ra != null ? interrDetail.sensing_ra + ' mV' : '—'"></dd>
+                    </dl>
+                  </div>
+
+                  <div class="field-section">
+                    <h4>Pacing Threshold</h4>
+                    <dl>
+                      <template x-if="interrDetail.threshold_ra_v != null || interrDetail.threshold_ra_pw != null">
+                        <div style="display:contents">
+                          <dt>RA voltage</dt>
+                          <dd x-text="interrDetail.threshold_ra_v != null ? interrDetail.threshold_ra_v + ' V' : '—'"></dd>
+                          <dt>RA pulse width</dt>
+                          <dd x-text="interrDetail.threshold_ra_pw != null ? interrDetail.threshold_ra_pw + ' ms' : '—'"></dd>
+                        </div>
+                      </template>
+                      <dt>RV voltage</dt>
+                      <dd x-text="interrDetail.threshold_rv_v != null ? interrDetail.threshold_rv_v + ' V' : '—'"></dd>
+                      <dt>RV pulse width</dt>
+                      <dd x-text="interrDetail.threshold_rv_pw != null ? interrDetail.threshold_rv_pw + ' ms' : '—'"></dd>
+                      <template x-if="interrDetail.threshold_lv_v != null || interrDetail.threshold_lv_pw != null">
+                        <div style="display:contents">
+                          <dt>LV voltage</dt>
+                          <dd x-text="interrDetail.threshold_lv_v != null ? interrDetail.threshold_lv_v + ' V' : '—'"></dd>
+                          <dt>LV pulse width</dt>
+                          <dd x-text="interrDetail.threshold_lv_pw != null ? interrDetail.threshold_lv_pw + ' ms' : '—'"></dd>
+                        </div>
+                      </template>
+                    </dl>
+                  </div>
+
+                  <div class="field-section full-width" x-show="extraFields(interrDetail).length > 0">
+                    <h4>Additional Fields</h4>
+                    <dl>
+                      <template x-for="[k,v] in extraFields(interrDetail)" :key="k">
+                        <div style="display:contents">
+                          <dt x-text="k"></dt>
+                          <dd x-text="v"></dd>
+                        </div>
+                      </template>
+                    </dl>
+                  </div>
+                </div>
+              </div><!-- /detail-left -->
+
+              <!-- Drag handle -->
+              <div class="detail-divider"
+                   @mousedown.prevent="startDetailResize($event, $el.parentElement)"
+                   @touchstart.prevent="startDetailResize($event, $el.parentElement)">
+                <div class="detail-divider-grip"></div>
+              </div>
+
+              <!-- RIGHT: source document -->
+              <div class="detail-right">
+                <div class="doc-panel">
+                  <div class="doc-panel-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    Source Document
+                    <a :href="'/api/interrogations/' + interrDetail.id + '/document'"
+                       target="_blank" rel="noopener"
+                       class="doc-open-link" title="Open PDF in new tab">&#x2197;</a>
+                  </div>
+
+                  <!-- Loading state -->
+                  <div x-show="!docPageCount && !docPageError" class="doc-loading">
+                    <span class="spinner"></span> Rendering…
+                  </div>
+
+                  <!-- Error fallback -->
+                  <div x-show="docPageError" class="doc-loading">
+                    <a :href="'/api/interrogations/' + interrDetail.id + '/document'"
+                       target="_blank" rel="noopener" class="btn-secondary">Open PDF &#x2197;</a>
+                  </div>
+
+                  <!-- Page images (works on all browsers including mobile Safari) -->
+                  <div x-show="docPageCount > 0" class="doc-pages">
+                    <template x-for="n in docPageCount" :key="n">
+                      <img :src="`/api/interrogations/${interrDetail.id}/page/${n}`"
+                           class="doc-page" alt="">
+                    </template>
+                  </div>
+                </div>
+              </div><!-- /detail-right -->
+
+            </div><!-- /detail-layout -->
+          </div>
+        </template>
+      </div>
+
+      <!-- ══════════════════════════════════════════
+           JOBS LIST
+      ══════════════════════════════════════════ -->
+      <div x-show="page === 'jobs'">
+        <div class="page-header">
+          <h2>Raw Jobs</h2>
+          <button class="btn-primary" @click="uploadModal = true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:.4rem"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Upload file
+          </button>
+        </div>
+
+        <!-- Upload modal -->
+        <div class="modal-backdrop" x-show="uploadModal" x-transition @click.self="uploadModal = false">
+          <div class="modal">
+            <div class="modal-header">
+              <h3>Upload interrogation file</h3>
+              <button class="btn-icon-danger" @click="uploadModal = false" title="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <label class="form-label">Vendor</label>
+              <select class="form-select" x-model="uploadVendor">
+                <option value="abbott">Abbott</option>
+                <option value="biotronik">Biotronik</option>
+                <option value="boston_scientific">Boston Scientific</option>
+                <option value="medtronic">Medtronic</option>
+              </select>
+              <label class="form-label" style="margin-top:1rem">File
+                <span class="form-hint">PDF, PS — or .log (Abbott), .hl7 (BSc), BIOSTD*.pdf (Biotronik)</span>
+              </label>
+              <input class="form-file" type="file"
+                accept=".pdf,.ps,.log,.hl7"
+                @change="uploadFile = $event.target.files[0]">
+            </div>
+            <div class="modal-footer">
+              <button class="btn-secondary" @click="uploadModal = false">Cancel</button>
+              <button class="btn-primary" :disabled="!uploadFile || uploading" @click="uploadJob()">
+                <span x-show="!uploading">Upload</span>
+                <span x-show="uploading">Uploading…</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div x-show="jobs.length === 0" class="empty">No jobs received yet.</div>
+        <div class="table-wrap" x-show="jobs.length > 0">
+          <table>
+            <thead>
+              <tr>
+                <th>Received</th>
+                <th>Node</th>
+                <th>Vendor</th>
+                <th>Job</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="j in jobs" :key="j.id">
+                <tr>
+                  <td x-text="fmtDate(j.received_at)"></td>
+                  <td><code x-text="j.node_id"></code></td>
+                  <td>
+                    <select class="vendor-select"
+                            :value="j.vendor"
+                            @change="setVendor(j.id, $event.target.value, j)">
+                      <option value="abbott">abbott</option>
+                      <option value="medtronic">medtronic</option>
+                      <option value="boston_scientific">boston_scientific</option>
+                      <option value="biotronik">biotronik</option>
+                      <option value="ela_sorin">ela_sorin</option>
+                    </select>
+                  </td>
+                  <td><small x-text="j.job_name"></small></td>
+                  <td>
+                    <span class="badge" :class="statusBadge(j).cls"
+                          x-text="statusBadge(j).label" :title="j.parse_error || ''"></span>
+                  </td>
+                  <td style="white-space:nowrap">
+                    <a class="btn-icon-action" :href="`/api/jobs/${j.id}/pdf`" target="_blank" rel="noopener"
+                       :title="j.status==='pcl_only' ? 'Download raw PCL file' : 'View PDF'">
+                      <template x-if="j.status === 'pcl_only'">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                      </template>
+                      <template x-if="j.status !== 'pcl_only'">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                        </svg>
+                      </template>
+                    </a>
+                    <button class="btn-icon-action" @click="reprocessJob(j.id)" title="Reprocess job">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                      </svg>
+                    </button>
+                    <button class="btn-icon-danger" @click="deleteJob(j.id)" title="Delete job">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- State overlays -->
+      <div x-show="loading" class="loading">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" style="animation:spin 1s linear infinite;margin-bottom:.5rem">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+        <br>Loading…
+      </div>
+      <div x-show="error" class="error" x-text="error"></div>
+
+    </main>
+  </div>
+
+  <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+  <script src="/ui/alpine.min.js" defer></script>
+  <script src="/ui/app.js"></script>
+</body>
+</html>

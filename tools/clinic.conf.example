@@ -1,0 +1,25 @@
+# Pacemaker clinic feature manifest — deploy to /etc/pacemaker/clinic.conf
+#
+# Written by tools/configure-clinic.sh; read by the Pi3/Pi4 setup scripts via
+# tools/feature-lib.sh. One file per clinic describes which features that clinic
+# runs. Anything left unset defaults to "on" in the setup scripts, so a box with
+# no manifest behaves exactly like the pre-feature-flag scripts.
+
+CLINIC_NAME="example-clinic"
+
+# ── Relay subnet / AP (foundation — needed by every relay feature below) ──────
+FEATURE_RELAY_AP=on
+AP_SSID="relayap"
+AP_PASS="RelayPrint#1"
+AP_CHANNEL=6
+AP_HIDDEN=off          # off = broadcast. Keep off: a hidden SSID broke the Pico 2W join path.
+WIFI_COUNTRY=DE
+
+# ── Pi3 features ─────────────────────────────────────────────────────────────
+FEATURE_SAMBA_SHARE=on     # export-relay: \\PI3\import SMB share + export ingest
+FEATURE_IMPORT_HUB=on      # import-relay: sender->presenter queue on :8090
+FEATURE_PRINTER_WEBUI=on   # printer-relay: CUPS raw queue + print-relay web UI
+
+# ── Pi4 central features (wired in a later pass) ──────────────────────────────
+FEATURE_CENTRAL_WEBUI=off  # pacemaker-central web UI (Docker)
+CENTRAL_URL="https://central.local:8443"

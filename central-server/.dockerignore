@@ -1,0 +1,9 @@
+.env
+certs/
+config/
+bluetooth/
+systemd/
+install.sh
+compose.yaml
+__pycache__/
+*.pyc

@@ -1,0 +1,16 @@
+[Unit]
+Description=USB Printer Gadget (configfs setup)
+# node.conf and storage.img are on the root filesystem (available before local-fs.target).
+# Only hard dep is modules-load (dwc2 + libcomposite must be loaded first).
+After=systemd-modules-load.service
+Before=capture-daemon.service storage-daemon.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/setup-gadget.sh
+ExecStop=/bin/bash -c 'echo "" > /sys/kernel/config/usb_gadget/printer_gadget/UDC || true'
+
+[Install]
+WantedBy=multi-user.target

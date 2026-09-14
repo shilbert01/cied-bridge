@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KardiSynch HID Bridge (WebHID)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  button { font: inherit; padding: .5rem .9rem; margin: .2rem .3rem .2rem 0; border-radius: 6px;
+           border: 1px solid #8888; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { margin: .6rem 0; }
+  .pill { display:inline-block; padding:.1rem .5rem; border-radius:999px; font-size:.8rem; border:1px solid #8888; }
+  .ok { color:#0a0; } .bad { color:#c00; } .muted { opacity:.7; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px;
+         background: #8881; padding: .8rem; border-radius: 8px; height: 320px; overflow:auto; }
+  code { background:#8882; padding:0 .3rem; border-radius:4px; }
+</style>
+</head>
+<body>
+<h1>KardiSynch HID Bridge <span class="muted">(WebHID)</span></h1>
+<p class="muted">Reassembles the file stream from the Pi Zero USB HID receiver and writes it into a folder
+KardiSynch watches. No install — runs in Edge/Chrome. Keep this tab open while receiving.</p>
+
+<div class="row">
+  <button id="btnDevice">1 · Connect HID device</button>
+  <span id="devState" class="pill">no device</span>
+</div>
+<div class="row">
+  <button id="btnFolder">2 · Choose output folder</button>
+  <span id="dirState" class="pill">no folder</span>
+</div>
+<div class="row">
+  Files received: <b id="count">0</b>
+</div>
+
+<div id="log"></div>
+
+<p class="muted" style="font-size:.85rem">
+  Device filter: VID <code>0x1D6B</code> / PID <code>0x0104</code> (must match <code>gadget-hid.sh</code>).
+  If WebHID or the folder picker is missing, this browser/PC has them disabled by policy.
+</p>
+
+<script>
+"use strict";
+
+// ---- protocol (mirrors hid_sender.py) --------------------------------------
+const VID = 0x1d6b, PID = 0x0104;
+const MARKER = 0x01;
+const PKT_FILE_START = 0x01, PKT_FILE_DATA = 0x02, PKT_FILE_END = 0x03, PKT_ACK = 0x05;
+const PAYLOAD = 60;
+
+// CRC32 (IEEE, reflected) — matches Python zlib.crc32 / the Pi sender.
+const CRC = (() => { const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) { let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0; } return t; })();
+function crc32(bytes) { let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = (CRC[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8)) >>> 0;
+  return (c ^ 0xFFFFFFFF) >>> 0; }
+
+// ---- state -----------------------------------------------------------------
+let device = null, dirHandle = null, fileCount = 0;
+let cur = null; // { name, size, crc, buf, off }
+
+const $ = id => document.getElementById(id);
+function log(msg, cls) {
+  const t = new Date().toLocaleTimeString();
+  const line = `[${t}] ${msg}\n`;
+  const el = $("log");
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = line;
+  el.appendChild(span); el.scrollTop = el.scrollHeight;
+}
+
+// ---- WebHID ----------------------------------------------------------------
+$("btnDevice").onclick = async () => {
+  if (!("hid" in navigator)) { log("WebHID not available (needs Edge/Chrome, not policy-blocked).", "bad"); return; }
+  try {
+    const list = await navigator.hid.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
+    if (!list.length) { log("No device selected.", "muted"); return; }
+    device = list[0];
+    if (!device.opened) await device.open();
+    device.addEventListener("inputreport", onReport);
+    $("devState").textContent = "connected: " + device.productName;
+    $("devState").className = "pill ok";
+    log("HID device connected: " + device.productName, "ok");
+  } catch (e) { log("connect failed: " + e.message, "bad"); }
+};
+
+navigator.hid?.addEventListener?.("disconnect", e => {
+  if (device && e.device === device) {
+    log("device disconnected — click Connect again after it re-enumerates.", "bad");
+    $("devState").textContent = "disconnected"; $("devState").className = "pill bad";
+    device = null;
+  }
+});
+
+// ---- output folder ---------------------------------------------------------
+$("btnFolder").onclick = async () => {
+  if (!window.showDirectoryPicker) { log("File System Access not available (policy-blocked?).", "bad"); return; }
+  try {
+    dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+    $("dirState").textContent = "folder: " + dirHandle.name;
+    $("dirState").className = "pill ok";
+    log("Output folder set: " + dirHandle.name, "ok");
+  } catch (e) { log("folder pick cancelled/failed: " + e.message, "muted"); }
+};
+
+// ---- report handling -------------------------------------------------------
+function onReport(e) {
+  // reportId is 0 (no report IDs declared), so e.data is the 64 report bytes.
+  const dv = e.data;
+  if (dv.byteLength < 5 || dv.getUint8(0) !== MARKER) return;
+  const type = dv.getUint8(1);
+  const raw = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+
+  if (type === PKT_FILE_START) {
+    const size = dv.getUint32(4, true);
+    const fcrc = dv.getUint32(8, true);
+    let end = 12; while (end < 64 && raw[end] !== 0) end++;
+    const name = new TextDecoder().decode(raw.slice(12, end)) || "unnamed.dat";
+    cur = { name, size, crc: fcrc, buf: new Uint8Array(size), off: 0 };
+    log(`receiving: ${name} (${size} bytes)`);
+  } else if (type === PKT_FILE_DATA) {
+    if (!cur) return;
+    const n = Math.min(cur.size - cur.off, PAYLOAD);
+    if (n > 0) { cur.buf.set(raw.slice(4, 4 + n), cur.off); cur.off += n; }
+  } else if (type === PKT_FILE_END) {
+    if (!cur) return;
+    const endCrc = dv.getUint32(4, true);
+    const actual = crc32(cur.buf);
+    const ok = (actual === cur.crc && actual === endCrc);
+    finishFile(cur, ok, actual);
+    cur = null;
+  }
+}
+
+async function finishFile(f, ok, actual) {
+  if (ok) {
+    try { await writeFile(f.name, f.buf);
+      fileCount++; $("count").textContent = fileCount;
+      log(`saved: ${f.name} (${f.buf.length} bytes, CRC OK)`, "ok");
+    } catch (e) { ok = false; log(`write failed for ${f.name}: ${e.message}`, "bad"); }
+  } else {
+    log(`CRC MISMATCH ${f.name}: expected ${hex(f.crc)} actual ${hex(actual)}`, "bad");
+  }
+  await sendAck(ok, actual);
+}
+
+async function writeFile(name, bytes) {
+  if (!dirHandle) throw new Error("no output folder chosen");
+  const safe = name.replace(/[\\/]/g, "_");
+  const fh = await dirHandle.getFileHandle(safe, { create: true });
+  const w = await fh.createWritable();          // atomic: swaps in on close()
+  await w.write(bytes);
+  await w.close();
+}
+
+async function sendAck(ok, crc) {
+  if (!device) return;
+  const rep = new Uint8Array(64);
+  rep[0] = MARKER; rep[1] = PKT_ACK; rep[2] = 0; rep[3] = 0; rep[4] = ok ? 1 : 0;
+  new DataView(rep.buffer).setUint32(5, crc, true);
+  try { await device.sendReport(0, rep); }
+  catch (e) { log("ACK send failed: " + e.message, "bad"); }
+}
+
+const hex = n => "0x" + (n >>> 0).toString(16).padStart(8, "0");
+
+// startup hints
+if (!("hid" in navigator)) log("This browser has no WebHID — use Edge or Chrome.", "bad");
+if (!window.showDirectoryPicker) log("This browser has no File System Access — use Edge or Chrome.", "bad");
+if (!window.isSecureContext) log("Not a secure context — open via file:// or https:// (not plain http on a LAN).", "bad");
+</script>
+</body>
+</html>

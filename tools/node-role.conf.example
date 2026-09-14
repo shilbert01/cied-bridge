@@ -1,0 +1,12 @@
+# Pacemaker node role — deploy to /etc/pacemaker/node-role.conf
+#
+# Selects what a systemd-based Pi Zero node does. Read by tools/setup-node-role.sh,
+# which enables that role's gadget + daemons and DISABLES the other roles' units.
+#
+# Supported on systemd (Raspberry Pi OS) nodes:
+#   edge    — USB printer gadget -> capture PostScript -> forward to central
+#   import  — USB drive presenter -> pull from hub -> inject (import-relay)
+#
+# NOT selectable at runtime (Buildroot nodes fix their role at image-build time):
+#   printer, export
+NODE_ROLE=import

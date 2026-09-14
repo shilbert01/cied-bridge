@@ -1,0 +1,44 @@
+NODE_ID=import-01
+
+# USB Mass Storage gadget identity — generic USB drive.
+# Keep VID/PID + INQUIRY neutral: some embedded hosts reject "Linux File-Stor Gadget".
+GADGET_VID=0x1d6b
+GADGET_PID=0x0104
+GADGET_SERIAL=PMCIMP001
+GADGET_MANUFACTURER="PacemakerCentral"
+GADGET_PRODUCT="Import Drive"
+
+# Backing disk image presented to the connected host computer.
+# The host READS files from this drive. The daemon WRITES files into it
+# (via the eject/inject cycle) — the host never writes here.
+DISK_IMAGE=/var/lib/pacemaker-import/disk.img
+DISK_SIZE_MB=256
+
+# configfs gadget name (must match setup-gadget.sh)
+GADGET_NAME=import_gadget
+
+# Where the receive-server drops incoming files before they are injected
+SPOOL_DIR=/var/lib/pacemaker-import/spool
+
+# Where injected files are archived after successful delivery (audit trail)
+DELIVERED_DIR=/var/lib/pacemaker-import/delivered
+
+# Subdirectory on the drive files are placed into ("" = drive root)
+DRIVE_SUBDIR=
+
+# Import hub — this presenter PULLS from the hub (on the Pi3). Senders POST
+# their files to the hub, not to us; we never need a reachable address.
+IMPORT_HUB_URL=http://10.99.0.1:8090
+
+# How often to poll the hub for new files (seconds)
+POLL_INTERVAL=5
+
+# Max items to claim (and inject in one media-change cycle) per poll
+CLAIM_MAX=10
+
+# WiFi — connects to Pi3's hidden AP (same relay subnet as export-relay)
+WIFI_SSID=relayap
+WIFI_PSK=RelayPrint#1
+
+# Pi3 server host for NTP / reachability check
+PRINT_SERVER_HOST=10.99.0.1

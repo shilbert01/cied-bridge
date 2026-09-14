@@ -5,3 +5,12 @@ node_modules/
 .env
 *.key
 *.pem
+
+# Buildroot trees (huge, built from defconfig)
+printer-relay/buildroot/
+export-relay/buildroot/
+edge-node/buildroot/
+
+# Pico2W build artifacts
+printer-relay/pico2w/build/
+printer-relay/pico2w/.pio/

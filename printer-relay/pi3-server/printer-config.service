@@ -1,0 +1,17 @@
+[Unit]
+Description=Printer Relay configuration web UI
+After=cups.service network.target
+# Wants (not Requires): the UI must survive a CUPS stop/restart. With Requires,
+# systemd stopped this unit whenever cups went down — including the restart the
+# UI itself triggers via the job-preservation toggle — and because that counts as
+# a clean stop rather than a failure, Restart=on-failure never brought it back.
+Wants=cups.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/printer-config-server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

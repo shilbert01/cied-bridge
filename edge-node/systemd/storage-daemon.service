@@ -1,0 +1,20 @@
+[Unit]
+Description=Pacemaker Edge Storage Daemon
+Documentation=https://github.com/your-org/pacemaker-bridge
+After=usb-printer-gadget.service
+Requires=usb-printer-gadget.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -OO /usr/local/bin/storage_daemon.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pacemaker-storage
+
+# Needs root to loop-mount the backing image
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Pacemaker Print Job Capture Daemon
+After=usb-printer-gadget.service
+Requires=usb-printer-gadget.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -OO /usr/local/bin/capture_daemon.py
+Restart=always
+RestartSec=3
+
+# Watchdog: systemd will restart the unit if it doesn't ping within 30s.
+# capture_daemon uses blocking reads so it can't ping — rely on Restart=always
+# and the hardware watchdog (enabled via dtparam=watchdog=on) for hard hangs.
+
+# Limit blast radius if the queue grows unexpectedly
+LimitFSIZE=512M
+
+[Install]
+WantedBy=multi-user.target

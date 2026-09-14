@@ -1,0 +1,23 @@
+[Unit]
+Description=Pacemaker Central API Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pacemaker-central/server.conf
+ExecStart=/opt/pacemaker-central/venv/bin/uvicorn api.main:app \
+    --host ${HOST} \
+    --port ${PORT} \
+    --ssl-keyfile  ${KEY_FILE} \
+    --ssl-certfile ${CERT_FILE} \
+    --workers 1 \
+    --log-level info
+WorkingDirectory=/opt/pacemaker-central
+Restart=always
+RestartSec=5
+# Limit in case a corrupt PS file causes Ghostscript to spin
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

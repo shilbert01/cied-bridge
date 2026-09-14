@@ -1,0 +1,19 @@
+[Unit]
+Description=KardiSynch outbox -> import hub forwarder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs where /data/kardisynch-outbox lives (the central server). If the import
+# hub is co-located, set HUB_URL=http://127.0.0.1:8090. Pin a receiver with
+# TARGET_NODE to match its NODE_ID (e.g. hid-leipzig-01).
+Environment=OUTBOX_DIR=/data/kardisynch-outbox
+Environment=HUB_URL=http://10.99.0.1:8090
+Environment=TARGET_NODE=
+ExecStart=/usr/local/sbin/outbox-to-hub.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

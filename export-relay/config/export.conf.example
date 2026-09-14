@@ -1,0 +1,31 @@
+NODE_ID=export-01
+
+# USB Mass Storage gadget identity — generic USB drive
+GADGET_VID=0x1d6b
+GADGET_PID=0x0104
+GADGET_SERIAL=PMCEXP001
+GADGET_MANUFACTURER="PacemakerCentral"
+GADGET_PRODUCT="Export Drive"
+
+# Backing disk image presented to the connected programmer
+DISK_IMAGE=/var/lib/pacemaker-export/disk.img
+DISK_SIZE_MB=256
+
+# File tracking — prevents re-forwarding files already seen
+SEEN_DB=/var/lib/pacemaker-export/seen_exports.txt
+
+# Local staging directory for extracted export files
+EXPORT_DIR=/var/lib/pacemaker-export/exports
+
+# Pi3 server — receives forwarded files, serves SAMBA share
+EXPORT_SERVER_HOST=10.99.0.1
+
+# How long to keep retrying a failed POST before giving up on a file
+GIVEUP_SECS=300
+
+# WiFi — connects to Pi3's hidden AP
+WIFI_SSID=relayap
+WIFI_PSK=RelayPrint#1
+
+# Pi3 server host for NTP / reachability check
+PRINT_SERVER_HOST=10.99.0.1

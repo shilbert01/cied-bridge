@@ -1,0 +1,13 @@
+[Unit]
+Description=KardiSynch USB HID gadget
+After=local-fs.target
+# Only one gadget may own the OTG port; mass-storage mode uses usb-import-gadget.
+Conflicts=usb-import-gadget.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/gadget-hid.sh
+
+[Install]
+WantedBy=multi-user.target

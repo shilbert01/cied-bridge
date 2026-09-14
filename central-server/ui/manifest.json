@@ -1,0 +1,9 @@
+{
+  "name": "Pacemaker Central",
+  "short_name": "PM Central",
+  "start_url": "/ui/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1d4ed8",
+  "icons": []
+}

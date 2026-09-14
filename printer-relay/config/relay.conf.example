@@ -1,0 +1,32 @@
+NODE_ID=relay-01
+
+# USB gadget identity presented to the host device
+# Set to match the printer the programmer already trusts (HP LaserJet 400 M401dn)
+GADGET_VID=0x03f0
+GADGET_PID=0x152a
+GADGET_SERIAL=VNH6G15554
+GADGET_MANUFACTURER="Hewlett-Packard"
+GADGET_PRODUCT="HP LaserJet 400 M401dn"
+
+# IEEE-1284 PnP string — verify with: find /sys/bus/usb -name ieee1284_id -exec cat {} \;
+PNP_STRING="MFG:Hewlett-Packard;MDL:HP LaserJet 400 M401dn;CMD:PJL,PCL,PCLXL,POSTSCRIPT;CLS:PRINTER;DES:HP LaserJet 400 M401dn;MEM:MEM=52MB;"
+
+# configfs f_printer creates /dev/g_printer0
+GADGET_DEVICE=/dev/g_printer0
+
+# Local queue (relay_daemon.py buffers here on LPR delivery failure)
+QUEUE_DIR=/var/lib/pacemaker-relay/queue
+SENT_DIR=/var/lib/pacemaker-relay/sent
+
+# Pi3 print server — LPR (port 515)
+PRINT_SERVER_HOST=10.99.0.1
+PRINT_SERVER_PORT=515
+PRINT_SERVER_QUEUE=LaserPrinter
+
+# Seconds to keep retrying LPR delivery before dropping the job
+LPR_GIVEUP_SECS=300
+
+# PJL tray override — set to e.g. TRAY2 to force a specific tray on every job.
+# Leave empty to let the printer use its own default (works for most printers).
+# Controlled via the Pi3 web interface.
+MEDIASOURCE=

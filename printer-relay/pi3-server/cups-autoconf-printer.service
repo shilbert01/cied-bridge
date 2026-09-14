@@ -1,0 +1,17 @@
+[Unit]
+Description=Auto-configure CUPS queue for connected USB printer
+After=cups.service
+Requires=cups.service
+# Order after ipp-usb: on the boot that exposed the race, this unit started 12 ms
+# BEFORE ipp-usb, so it inspected the device while ipp-usb had not yet claimed it
+# and bound the queue to a usb:// URI that stopped resolving moments later.
+# Ordering alone is not sufficient (ipp-usb needs a few more seconds to listen),
+# so the script also settles and re-checks — this just removes the head start.
+After=ipp-usb.service
+Wants=ipp-usb.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cups-autoconf-printer.sh
+StandardOutput=journal
+StandardError=journal

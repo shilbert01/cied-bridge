@@ -1,0 +1,346 @@
+diff --git a/src/components/DeviceLeadEditor.tsx b/src/components/DeviceLeadEditor.tsx
+index 0ee5e52..9640920 100644
+--- a/src/components/DeviceLeadEditor.tsx
++++ b/src/components/DeviceLeadEditor.tsx
+@@ -29,6 +29,8 @@ interface Lead {
+     type?: string;
+     connector?: string;
+     position?: string;
++    device_serial?: string;
++    status?: string;
+ }
+ 
+ interface PatientData {
+@@ -281,7 +283,7 @@ const DeviceLeadEditor: React.FC<DeviceLeadEditorProps> = ({ open, onOpenChange,
+                                                 <Trash2 className="h-3 w-3" />
+                                             </Button>
+ 
+-                                            <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
++                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                                 <div className="space-y-1">
+                                                     <Label className="text-xs text-muted-foreground">Manufacturer</Label>
+                                                     <Select value={lead.manufacturer} onValueChange={(v) => handleLeadChange(idx, 'manufacturer', v)}>
+@@ -300,7 +302,12 @@ const DeviceLeadEditor: React.FC<DeviceLeadEditorProps> = ({ open, onOpenChange,
+                                                     <Label className="text-xs text-muted-foreground">Serial</Label>
+                                                     <Input className="h-8 font-mono" value={lead.serial} onChange={e => handleLeadChange(idx, 'serial', e.target.value)} />
+                                                 </div>
+-                                                {/* New Fields */}
++                                                <div className="space-y-1">
++                                                    <Label className="text-xs text-muted-foreground">Implant Date</Label>
++                                                    <Input className="h-8" value={lead.implant_date} onChange={e => handleLeadChange(idx, 'implant_date', e.target.value)} placeholder="YYYY-MM-DD" />
++                                                </div>
++                                            </div>
++                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+                                                 <div className="space-y-1">
+                                                     <Label className="text-xs text-muted-foreground">Type</Label>
+                                                     <Select value={lead.type} onValueChange={(v) => handleLeadChange(idx, 'type', v)}>
+@@ -340,10 +347,30 @@ const DeviceLeadEditor: React.FC<DeviceLeadEditorProps> = ({ open, onOpenChange,
+                                                         );
+                                                     })()}
+                                                 </div>
+-
+                                                 <div className="space-y-1">
+-                                                    <Label className="text-xs text-muted-foreground">Implant Date</Label>
+-                                                    <Input className="h-8" value={lead.implant_date} onChange={e => handleLeadChange(idx, 'implant_date', e.target.value)} placeholder="YYYY-MM-DD" />
++                                                    <Label className="text-xs text-muted-foreground">Connected Device</Label>
++                                                    <Select value={lead.device_serial || ''} onValueChange={(v) => handleLeadChange(idx, 'device_serial', v)}>
++                                                        <SelectTrigger className="h-8"><SelectValue placeholder="—" /></SelectTrigger>
++                                                        <SelectContent>
++                                                            <SelectItem value="">Unassociated</SelectItem>
++                                                            {formData.devices.filter(d => d.serial).map(d => (
++                                                                <SelectItem key={d.serial} value={d.serial}>
++                                                                    {d.manufacturer} {d.model} ({d.serial})
++                                                                </SelectItem>
++                                                            ))}
++                                                        </SelectContent>
++                                                    </Select>
++                                                </div>
++                                                <div className="space-y-1">
++                                                    <Label className="text-xs text-muted-foreground">Lead Status</Label>
++                                                    <Select value={lead.status || 'active'} onValueChange={(v) => handleLeadChange(idx, 'status', v)}>
++                                                        <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
++                                                        <SelectContent>
++                                                            <SelectItem value="active">Active</SelectItem>
++                                                            <SelectItem value="abandoned">Abandoned</SelectItem>
++                                                            <SelectItem value="capped">Capped</SelectItem>
++                                                        </SelectContent>
++                                                    </Select>
+                                                 </div>
+                                             </div>
+                                         </div>
+diff --git a/src/main/main.ts b/src/main/main.ts
+index c794cc0..d640c7d 100644
+--- a/src/main/main.ts
++++ b/src/main/main.ts
+@@ -1762,6 +1762,11 @@ ipcMain.handle('select-file', async (event, filters?: { name: string; extensions
+   return result.filePaths[0];
+ });
+ 
++ipcMain.handle('ciedocr-health', async () => {
++  const { health } = await import('./services/ciedocrClient');
++  return health();
++});
++
+ ipcMain.handle('analyze-biotronik-xml', async (event, filePath: string) => {
+   if (!isPathAllowed(filePath)) {
+     throw new Error('Access denied: path is outside allowed directories');
+diff --git a/src/preload/preload.ts b/src/preload/preload.ts
+index db5364b..ac06050 100644
+--- a/src/preload/preload.ts
++++ b/src/preload/preload.ts
+@@ -142,6 +142,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
+   credentialList: () => ipcRenderer.invoke('credential-list'),
+   credentialIsAvailable: () => ipcRenderer.invoke('credential-is-available'),
+ 
++  // CIEDOcr
++  ciedocrHealth: () => ipcRenderer.invoke('ciedocr-health'),
++
+   // Debug tools
+   selectFile: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke('select-file', filters),
+   analyzeBiotronikXml: (filePath: string) => ipcRenderer.invoke('analyze-biotronik-xml', filePath),
+diff --git a/src/renderer/Settings.tsx b/src/renderer/Settings.tsx
+index 88f7545..f5876af 100644
+--- a/src/renderer/Settings.tsx
++++ b/src/renderer/Settings.tsx
+@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/label';
+ import { Input } from '@/components/ui/input';
+ import { Button } from '@/components/ui/button';
+ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+-import { FolderOpen, Save, RotateCcw, RefreshCw, Archive, Download, ShieldCheck, ArrowDown, ArrowRight, Check, HelpCircle, Bug, Copy, CircleCheck, CircleX, Users, FolderInput } from 'lucide-react';
++import { FolderOpen, Save, RotateCcw, RefreshCw, Archive, Download, ShieldCheck, ArrowDown, ArrowRight, Check, HelpCircle, Bug, Copy, CircleCheck, CircleX, Users, FolderInput, Cpu } from 'lucide-react';
+ import { Switch } from '@/components/ui/switch';
+ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+ import { Trash2 } from 'lucide-react';
+@@ -142,6 +142,10 @@ const Settings: React.FC = () => {
+     updateChannel: string;
+     mriCountry: string;
+     mriManufacturers: Record<string, boolean>;
++    ciedocrUrl: string;
++    ciedocrToken: string;
++    ciedocrEnabled: string;
++    ciedocrStrategy: string;
+   }>({
+     importDir: '',
+     intraopImportDir: '',
+@@ -152,6 +156,10 @@ const Settings: React.FC = () => {
+     updateChannel: 'stable',
+     mriCountry: 'Germany',
+     mriManufacturers: {} as Record<string, boolean>,
++    ciedocrUrl: '',
++    ciedocrToken: '',
++    ciedocrEnabled: 'false',
++    ciedocrStrategy: 'fallback',
+   });
+   const [updateStatus, setUpdateStatus] = useState<string>('Idle');
+   const [appVersion, setAppVersion] = useState<string>('');
+@@ -159,6 +167,10 @@ const Settings: React.FC = () => {
+   // Which manufacturer data-update check is currently running (null = none)
+   const [checkingUpdatesFor, setCheckingUpdatesFor] = useState<string | null>(null);
+ 
++  // CIEDOcr health check state
++  const [ciedocrHealthy, setCiedocrHealthy] = useState<boolean | null>(null);
++  const [ciedocrChecking, setCiedocrChecking] = useState(false);
++
+   // Debug analyzer state (Biotronik)
+   const [debugFilePath, setDebugFilePath] = useState('');
+   const [debugResult, setDebugResult] = useState<any>(null);
+@@ -423,6 +435,94 @@ const Settings: React.FC = () => {
+                 </div>
+               </CardContent>
+             </Card>
++
++            {/* CIEDOcr Integration */}
++            <Card className="mt-4">
++              <CardHeader>
++                <CardTitle className="flex items-center gap-2">
++                  <Cpu className="h-5 w-5" /> CIEDOcr Extraction Service
++                </CardTitle>
++                <CardDescription>
++                  Connect to a CIEDOcr server for PDF extraction when local parsers fail (e.g. raster-only Abbott Merlin reports).
++                </CardDescription>
++              </CardHeader>
++              <CardContent className="space-y-4">
++                <div className="flex items-center justify-between">
++                  <div className="space-y-0.5">
++                    <Label>Enable CIEDOcr</Label>
++                    <p className="text-xs text-muted-foreground">When enabled, PDFs that local parsers can't handle will be sent to CIEDOcr.</p>
++                  </div>
++                  <Switch
++                    checked={settings.ciedocrEnabled === 'true'}
++                    onCheckedChange={(v) => setSettings({ ...settings, ciedocrEnabled: v ? 'true' : 'false' })}
++                  />
++                </div>
++
++                <div className="space-y-2">
++                  <Label htmlFor="ciedocr-url">Server URL</Label>
++                  <Input
++                    id="ciedocr-url"
++                    name="ciedocrUrl"
++                    value={settings.ciedocrUrl}
++                    onChange={handleInputChange}
++                    placeholder="http://bigboy.fritz.box:8000"
++                  />
++                </div>
++
++                <div className="space-y-2">
++                  <Label htmlFor="ciedocr-token">Bearer Token (optional)</Label>
++                  <Input
++                    id="ciedocr-token"
++                    name="ciedocrToken"
++                    type="password"
++                    value={settings.ciedocrToken}
++                    onChange={handleInputChange}
++                    placeholder="Leave empty if not required"
++                  />
++                </div>
++
++                <div className="space-y-2">
++                  <Label>Strategy</Label>
++                  <div className="grid grid-cols-2 gap-3">
++                    <div
++                      className={`cursor-pointer border rounded-lg p-3 text-xs transition-all ${settings.ciedocrStrategy !== 'always' ? 'ring-2 ring-primary bg-muted' : 'hover:bg-accent'}`}
++                      onClick={() => setSettings({ ...settings, ciedocrStrategy: 'fallback' })}
++                    >
++                      <span className="font-semibold">Fallback only</span>
++                      <p className="text-muted-foreground mt-1">Use CIEDOcr only when local parsing fails.</p>
++                    </div>
++                    <div
++                      className={`cursor-pointer border rounded-lg p-3 text-xs transition-all ${settings.ciedocrStrategy === 'always' ? 'ring-2 ring-primary bg-muted' : 'hover:bg-accent'}`}
++                      onClick={() => setSettings({ ...settings, ciedocrStrategy: 'always' })}
++                    >
++                      <span className="font-semibold">Always</span>
++                      <p className="text-muted-foreground mt-1">Always use CIEDOcr for PDF extraction.</p>
++                    </div>
++                  </div>
++                </div>
++
++                <div className="flex items-center gap-3 pt-2">
++                  <Button type="button" variant="outline" size="sm" disabled={!settings.ciedocrUrl || ciedocrChecking} onClick={async () => {
++                    setCiedocrChecking(true);
++                    setCiedocrHealthy(null);
++                    try {
++                      // Save current URL/token first so the main process can use them
++                      await window.electronAPI.setSettings(settings);
++                      const ok = await window.electronAPI.ciedocrHealth();
++                      setCiedocrHealthy(ok);
++                    } catch {
++                      setCiedocrHealthy(false);
++                    } finally {
++                      setCiedocrChecking(false);
++                    }
++                  }}>
++                    {ciedocrChecking ? 'Testing...' : 'Test Connection'}
++                  </Button>
++                  {ciedocrHealthy === true && <span className="text-xs text-green-600 flex items-center gap-1"><CircleCheck className="h-3.5 w-3.5" /> Connected</span>}
++                  {ciedocrHealthy === false && <span className="text-xs text-destructive flex items-center gap-1"><CircleX className="h-3.5 w-3.5" /> Unreachable</span>}
++                </div>
++              </CardContent>
++            </Card>
+           </TabsContent>
+ 
+           {/* Database */}
+diff --git a/src/renderer/components/FormattedReport.tsx b/src/renderer/components/FormattedReport.tsx
+index 64af5c6..0814f02 100644
+--- a/src/renderer/components/FormattedReport.tsx
++++ b/src/renderer/components/FormattedReport.tsx
+@@ -87,35 +87,72 @@ const FormattedReport: React.FC<FormattedReportProps> = ({ report, previousRepor
+       )}
+ 
+       {/* Lead Parameters */}
+-      {report.leads && report.leads.length > 0 && (
+-        <Card>
+-          <CardHeader className="py-3 px-4">
+-            <CardTitle className="text-sm flex items-center gap-2">
+-              <Zap className="h-4 w-4 text-yellow-600" /> Lead Parameters
+-            </CardTitle>
+-          </CardHeader>
+-          <CardContent className="px-4 pb-3 pt-0 space-y-3">
+-            {report.leads.map((lead: any, idx: number) => {
+-              const prevLead = previousReport?.leads?.[idx];
+-              return (
+-                <div key={idx} className="p-2.5 bg-muted rounded-md">
+-                  <div className="flex items-center gap-2 mb-2">
+-                    <span className="text-xs font-semibold">{lead.location || lead.type || `Lead ${idx + 1}`}</span>
+-                    {lead.model && <span className="text-[10px] text-muted-foreground">{lead.model}</span>}
+-                  </div>
+-                  <div className="space-y-0.5 text-xs font-mono">
+-                    {renderDelta('Impedance', lead.impedance, prevLead?.impedance, 'Ohm')}
+-                    {renderDelta('Threshold', lead.threshold, prevLead?.threshold, 'V')}
+-                    {renderDelta('Pulse Width', lead.pulseWidth || lead.pulse_width, prevLead?.pulseWidth || prevLead?.pulse_width, 'ms')}
+-                    {renderDelta('Sensing', lead.sensing, prevLead?.sensing, 'mV')}
+-                    {renderDelta('P/R Wave', lead.pWave || lead.rWave, prevLead?.pWave || prevLead?.rWave, 'mV')}
+-                  </div>
++      {report.leads && report.leads.length > 0 && (() => {
++        const leads: any[] = report.leads;
++        const hasDeviceAssoc = leads.some((l: any) => l.device_serial);
++
++        // Group leads by device_serial when available
++        const groups: { serial: string; label: string; leads: any[] }[] = [];
++        if (hasDeviceAssoc) {
++          const byDevice = new Map<string, any[]>();
++          for (const lead of leads) {
++            const key = lead.device_serial || '';
++            if (!byDevice.has(key)) byDevice.set(key, []);
++            byDevice.get(key)!.push(lead);
++          }
++          for (const [serial, deviceLeads] of byDevice) {
++            groups.push({
++              serial,
++              label: serial ? `Device ${serial}` : 'Unassociated',
++              leads: deviceLeads,
++            });
++          }
++        } else {
++          groups.push({ serial: '', label: '', leads });
++        }
++
++        return (
++          <Card>
++            <CardHeader className="py-3 px-4">
++              <CardTitle className="text-sm flex items-center gap-2">
++                <Zap className="h-4 w-4 text-yellow-600" /> Lead Parameters
++              </CardTitle>
++            </CardHeader>
++            <CardContent className="px-4 pb-3 pt-0 space-y-3">
++              {groups.map((group) => (
++                <div key={group.serial}>
++                  {hasDeviceAssoc && (
++                    <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 mt-1">
++                      {group.label}
++                    </div>
++                  )}
++                  {group.leads.map((lead: any, idx: number) => {
++                    const prevLead = previousReport?.leads?.[idx];
++                    return (
++                      <div key={idx} className="p-2.5 bg-muted rounded-md mb-2">
++                        <div className="flex items-center gap-2 mb-2">
++                          <span className="text-xs font-semibold">{lead.location || lead.type || `Lead ${idx + 1}`}</span>
++                          {lead.model && <span className="text-[10px] text-muted-foreground">{lead.model}</span>}
++                          {lead.status && lead.status !== 'active' && (
++                            <Badge variant="outline" className="text-[9px] h-4 capitalize">{lead.status}</Badge>
++                          )}
++                        </div>
++                        <div className="space-y-0.5 text-xs font-mono">
++                          {renderDelta('Impedance', lead.impedance, prevLead?.impedance, 'Ohm')}
++                          {renderDelta('Threshold', lead.threshold, prevLead?.threshold, 'V')}
++                          {renderDelta('Pulse Width', lead.pulseWidth || lead.pulse_width, prevLead?.pulseWidth || prevLead?.pulse_width, 'ms')}
++                          {renderDelta('Sensing', lead.sensing, prevLead?.sensing, 'mV')}
++                          {renderDelta('P/R Wave', lead.pWave || lead.rWave, prevLead?.pWave || prevLead?.rWave, 'mV')}
++                        </div>
++                      </div>
++                    );
++                  })}
+                 </div>
+-              );
+-            })}
+-          </CardContent>
+-        </Card>
+-      )}
++              ))}
++            </CardContent>
++          </Card>
++        );
++      })()}
+ 
+       {/* Sensing/Pacing Thresholds */}
+       {report.measurements && (

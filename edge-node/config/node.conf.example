@@ -1,0 +1,35 @@
+NODE_ID=bay-01
+VENDOR=medtronic
+
+# USB gadget identity presented to the host interrogation device
+GADGET_VID=0x1d6b
+GADGET_PID=0x0104
+GADGET_SERIAL=PMCEDGE0001
+GADGET_MANUFACTURER="ClinicEdge"
+GADGET_PRODUCT="Generic PostScript Printer"
+
+# IEEE-1284 PnP string - may need tuning per vendor once real-device testing done
+PNP_STRING="MFG:Generic;CMD:PS;MDL:GenericPostScript;CLS:PRINTER;DES:Generic PostScript Printer;"
+
+# configfs f_printer creates /dev/g_printer0 (devtmpfs); no /dev/usb/ subdir
+GADGET_DEVICE=/dev/g_printer0
+
+# Print job queue (capture_daemon.py → forwarder.py)
+CAPTURE_DIR=/var/lib/pacemaker-edge/queue
+SENT_DIR=/var/lib/pacemaker-edge/sent
+
+# USB mass storage (composite gadget) — run create-storage-image.sh to initialise
+# Leave STORAGE_IMG unset or point to a non-existent file to disable mass storage.
+STORAGE_IMG=/var/lib/pacemaker-edge/storage.img
+STORAGE_SIZE_MB=256
+
+# Export file queue (storage_daemon.py → forwarder.py)
+EXPORT_DIR=/var/lib/pacemaker-edge/exports
+
+# Central server — connect via PacemakerCentral WiFi AP (10.42.0.1)
+CENTRAL_URL=https://10.42.0.1:8443/ingest
+CENTRAL_EXPORT_URL=https://10.42.0.1:8443/ingest-export
+# Pre-shared token; kept in config, ensure root-only perms on this file
+CENTRAL_TOKEN=changeme
+# CA cert for TLS verification (self-signed; copy from central-server/config/central-ca.crt)
+CA_CERT=/etc/pacemaker-edge/central-ca.crt

@@ -1,0 +1,14 @@
+[Unit]
+Description=Pacemaker Print Job Forwarder
+After=capture-daemon.service
+# network-online.target intentionally omitted: forwarder retries with exponential
+# backoff and waiting for DHCP on Pi Zero WiFi adds 30-90s to boot.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -OO /usr/local/bin/forwarder.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

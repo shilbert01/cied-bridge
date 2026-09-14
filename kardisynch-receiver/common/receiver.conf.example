@@ -1,0 +1,34 @@
+# KardiSynch receiver config — copy to /etc/kardisynch-receiver/receiver.conf
+# Consumed by hid_sender.py (and, for mass-storage mode, by the reused
+# import-relay import_daemon.py via its own /etc/pacemaker-import/import.conf).
+
+# Stable name this presenter claims under at the hub. Files POSTed with a
+# matching X-Target-Node are delivered only to this node; unaddressed files go
+# to any presenter. Keep it unique per receiver.
+NODE_ID=hid-leipzig-01
+
+# The import hub (import-relay/pi3-server/import-server.py). On the fleet this
+# is the Pi3 clinic server. Confirm per-site whether the hub is the central box
+# or a separate Pi3 (see plan).
+IMPORT_HUB_URL=http://10.99.0.1:8090
+
+# Local spool for files pulled from the hub before they are streamed to the host.
+SPOOL_DIR=/var/lib/kardisynch-receiver/spool
+
+# How often to poll the hub for new claims, seconds.
+POLL_INTERVAL=5
+
+# Max items leased per claim.
+CLAIM_MAX=10
+
+# ── HID delivery tuning ─────────────────────────────────────────────────────
+# HID device node created by gadget-hid.sh.
+HID_DEVICE=/dev/hidg0
+
+# Per-report pacing (seconds). 1ms ≈ 60 KB/s, matching the interrupt-EP budget.
+# Raise if the host companion app reports drops.
+SEND_DELAY=0.001
+
+# Seconds to wait for the host companion app's ACK output report after FILE_END.
+# On timeout the item is left unacked and the hub redelivers after its lease.
+ACK_TIMEOUT=10

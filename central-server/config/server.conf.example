@@ -1,0 +1,15 @@
+DATA_DIR=/var/lib/pacemaker-central
+DB_PATH=/var/lib/pacemaker-central/db.sqlite
+CERT_FILE=/etc/pacemaker-central/certs/server.crt
+KEY_FILE=/etc/pacemaker-central/certs/server.key
+
+# Shared with edge nodes — keep root-only perms
+INGEST_TOKEN=changeme
+
+# HTTPS listen
+HOST=0.0.0.0
+PORT=8443
+
+# Bluetooth PAN — tablet connects to this IP
+BT_PAN_IP=10.44.0.1
+BT_PAN_SUBNET=10.44.0.0/24

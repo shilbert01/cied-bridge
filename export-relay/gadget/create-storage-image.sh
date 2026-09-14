@@ -1,0 +1,60 @@
+#!/bin/sh
+# Creates the FAT32 backing image for the USB mass storage function.
+# Produces a proper partitioned disk (MBR + FAT32 on P1) so that
+# picky embedded USB hosts (Abbott programmers, etc.) accept it.
+# Run once at initial setup. The image is re-used across reboots.
+set -eu
+
+CONF=/etc/pacemaker-export/export.conf
+[ -f "$CONF" ] || { echo "Missing $CONF"; exit 1; }
+# shellcheck source=/dev/null
+. "$CONF"
+
+IMG="${DISK_IMAGE:-/var/lib/pacemaker-export/disk.img}"
+SIZE_MB="${DISK_SIZE_MB:-256}"
+
+if [ -f "$IMG" ]; then
+    echo "Image already exists: $IMG ($(($(wc -c < "$IMG") / 1024 / 1024))MB)"
+    exit 0
+fi
+
+mkdir -p "$(dirname "$IMG")"
+
+echo "Creating ${SIZE_MB}MB partitioned FAT32 image at $IMG ..."
+dd if=/dev/zero of="$IMG" bs=1M count="$SIZE_MB"
+
+# Write MBR + partition table: P1 starts at sector 2048 (1MB aligned), type 0x0C (FAT32 LBA).
+# sfdisk is not available in Buildroot; use Python instead.
+python3 - "$IMG" "$SIZE_MB" <<'PYEOF'
+import struct, sys
+img    = sys.argv[1]
+sz_mb  = int(sys.argv[2])
+total  = sz_mb * 1024 * 1024 // 512   # total sectors
+pstart = 2048                          # 1 MB alignment
+psize  = total - pstart
+
+entry = bytearray(16)
+entry[0]    = 0x00              # not bootable
+entry[1:4]  = b'\xfe\xff\xff'  # CHS start (ignored for LBA)
+entry[4]    = 0x0c             # FAT32 with LBA
+entry[5:8]  = b'\xfe\xff\xff'  # CHS end (ignored for LBA)
+struct.pack_into('<I', entry, 8,  pstart)
+struct.pack_into('<I', entry, 12, psize)
+
+with open(img, 'r+b') as f:
+    f.seek(446); f.write(bytes(entry))  # P1
+    f.write(bytes(48))                  # P2-P4 empty
+    f.seek(510); f.write(b'\x55\xaa')  # MBR signature
+
+print(f"MBR: P1 type=0x0C start={pstart} size={psize} ({psize//2048} MiB)")
+PYEOF
+
+# Format the partition (sector 2048 onwards) via a loop device.
+# BusyBox losetup: losetup -f prints the free loop; losetup -o sets offset.
+PART_OFFSET=$((2048 * 512))
+LOOP=$(losetup -f)
+losetup -o "$PART_OFFSET" "$LOOP" "$IMG"
+mkdosfs -F 32 -n PACEMAKER "$LOOP"
+losetup -d "$LOOP"
+
+echo "Done: $IMG (${SIZE_MB}MB, MBR + FAT32 on partition 1)"

@@ -1,0 +1,19 @@
+# Append these lines to /boot/firmware/config.txt (Raspberry Pi OS Bookworm)
+# or /boot/config.txt on older Bullseye images.
+
+# Enable dwc2 USB controller in peripheral/OTG mode (USB-C port becomes the gadget port)
+dtoverlay=dwc2,dr_mode=peripheral
+
+# ── Boot time optimisations for Pi Zero ─────────────────────────────────────
+# Skip the 1-second delay the bootloader inserts waiting for HDMI hotplug
+boot_delay=0
+
+# Skip the rainbow GPU splash screen
+disable_splash=1
+
+# Disable Bluetooth — edge node uses WiFi only; BT is only on the central server.
+# Saves ~400 ms and frees one UART.
+dtoverlay=disable-bt
+
+# Disable audio — not used on the edge node, avoids loading snd kernel modules
+dtparam=audio=off

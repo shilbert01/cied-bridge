@@ -1,0 +1,13 @@
+[Unit]
+Description=Pacemaker import relay — pulls files from the hub and injects them into the USB drive
+After=network.target usb-import-gadget.service
+Requires=usb-import-gadget.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/import_daemon.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

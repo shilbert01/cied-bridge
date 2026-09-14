@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""CUPS backend: writes to /dev/usb/lp0 via the kernel usblp driver.
+
+Each job is wrapped in proper PJL JOB/EOJ boundaries so the HP printer
+firmware marks the job complete and accepts the next one.  Without EOJ,
+HP LaserJets can enter a state where they NAK all subsequent bulk-OUT
+transfers until power-cycled.
+
+After sending, queries the printer via PJL STATUS until it reports idle.
+This prevents CUPS from dispatching the next job while the printer is
+still RIPping (PostScript rendering can take minutes on complex pages).
+
+On write timeout: closes the fd to interrupt the kernel write, then
+performs a full USB reset (rmmod usblp -> USBDEVFS_RESET -> modprobe usblp).
+
+Requires dtoverlay=dwc2,dr_mode=host in config.txt.
+Install as /usr/lib/cups/backend/usblp  (mode 0700, root-owned).
+Queue URI: usblp:///dev/usb/lp0
+"""
+
+import fcntl, glob, os, select, subprocess, sys, threading, time
+
+DEV = "/dev/usb/lp0"
+WRITE_TIMEOUT = 600
+READY_TIMEOUT = 600
+READY_POLL = 3
+UEL = b'\x1b%-12345X'
+USBDEVFS_RESET = 21780
+
+
+def log(msg):
+    sys.stderr.write("DEBUG: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def detect_language(data):
+    """Detect print data language from magic bytes."""
+    stripped = data.lstrip()
+    if stripped[:4] == b'%!PS' or stripped[:7] == b'%!Adobe':
+        return "POSTSCRIPT"
+    if stripped[:4] == b'%PDF':
+        return "PDF"
+    if stripped[:2] == b'\x1bE' or stripped[:2] == b'\x1b%':
+        return "PCL"
+    if stripped[:4] == b'@PJL':
+        return None
+    return "POSTSCRIPT"
+
+
+def make_pjl_envelope(data, job_id):
+    """Wrap print data in PJL JOB/EOJ boundaries."""
+    # Strip any existing UEL prefix from the data
+    raw = data
+    while raw.startswith(UEL):
+        raw = raw[len(UEL):]
+
+    # If data already has PJL commands, strip them to re-wrap cleanly
+    lang = detect_language(raw)
+
+    # Skip PJL header if data already starts with @PJL
+    if raw.lstrip().startswith(b'@PJL'):
+        lang = None
+
+    header = UEL + b'@PJL JOB NAME = "cups-%d"\r\n' % job_id
+    if lang:
+        header += b'@PJL ENTER LANGUAGE = %s\r\n' % lang.encode()
+
+    footer = UEL + b'@PJL EOJ NAME = "cups-%d"\r\n' % job_id + UEL
+
+    return header + raw + footer
+
+
+def ensure_usblp():
+    if os.path.exists(DEV):
+        return True
+    subprocess.run(["modprobe", "usblp"], capture_output=True, timeout=5)
+    for _ in range(20):
+        if os.path.exists(DEV):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def usb_reset():
+    """Full USB reset: unload usblp, hardware-reset the HP device, reload usblp."""
+    log("USB reset: unloading usblp")
+    subprocess.run(["rmmod", "usblp"], capture_output=True, timeout=5)
+    time.sleep(0.5)
+
+    for vid_path in glob.glob("/sys/bus/usb/devices/*/idVendor"):
+        try:
+            vid = open(vid_path).read().strip()
+            if vid != "03f0":
+                continue
+            base = os.path.dirname(vid_path)
+            busnum = int(open(os.path.join(base, "busnum")).read().strip())
+            devnum = int(open(os.path.join(base, "devnum")).read().strip())
+            devpath = "/dev/bus/usb/%03d/%03d" % (busnum, devnum)
+            log("USB reset: USBDEVFS_RESET on %s" % devpath)
+            fd = os.open(devpath, os.O_WRONLY)
+            fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+            os.close(fd)
+        except Exception as e:
+            log("USB reset ioctl error: %s" % e)
+
+    time.sleep(1)
+    log("USB reset: reloading usblp")
+    subprocess.run(["modprobe", "usblp"], capture_output=True, timeout=5)
+    for _ in range(20):
+        if os.path.exists(DEV):
+            log("USB reset: %s is back" % DEV)
+            return True
+        time.sleep(0.5)
+    log("USB reset: %s did not reappear" % DEV)
+    return False
+
+
+def timed_write(payload, timeout):
+    state = {"ok": False, "err": None, "elapsed": 0, "fd": -1}
+
+    def _write():
+        t0 = time.time()
+        try:
+            fd = os.open(DEV, os.O_WRONLY)
+            state["fd"] = fd
+            try:
+                os.write(fd, payload)
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                state["fd"] = -1
+            state["ok"] = True
+        except Exception as e:
+            state["err"] = e
+        state["elapsed"] = time.time() - t0
+
+    t = threading.Thread(target=_write, daemon=True)
+    t.start()
+    t0 = time.time()
+    t.join(timeout=timeout)
+
+    if t.is_alive():
+        elapsed = time.time() - t0
+        log("write blocked >%ds — closing fd and resetting USB" % int(elapsed))
+        fd = state["fd"]
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        t.join(timeout=10)
+        usb_reset()
+        state["err"] = TimeoutError("write timed out after %ds" % int(elapsed))
+        state["elapsed"] = time.time() - t0
+        return False, state["err"], state["elapsed"]
+
+    return state["ok"], state["err"], state["elapsed"]
+
+
+def pjl_status():
+    """Query printer PJL status. Returns status string or None on failure."""
+    query = UEL + b'@PJL INFO STATUS\r\n' + UEL
+    try:
+        fd = os.open(DEV, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        try:
+            os.write(fd, query)
+        except (BlockingIOError, OSError):
+            return None
+        time.sleep(0.5)
+        r, _, _ = select.select([fd], [], [], 3)
+        if r:
+            data = os.read(fd, 4096)
+            return data.decode("ascii", errors="replace")
+        return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def wait_printer_ready():
+    """Poll via PJL until the printer reports idle, with write-accept fallback."""
+    deadline = time.time() + READY_TIMEOUT
+    attempt = 0
+    idle_count = 0
+    while time.time() < deadline:
+        time.sleep(READY_POLL)
+        attempt += 1
+
+        status = pjl_status()
+        if status is not None:
+            status_lower = status.lower()
+            log("PJL poll %d: %s" % (attempt, status.strip()[:120]))
+            if "ready" in status_lower or "idle" in status_lower or "10001" in status:
+                idle_count += 1
+                if idle_count >= 2:
+                    log("printer idle (PJL confirmed %dx) after %ds" % (
+                        idle_count, attempt * READY_POLL))
+                    return True
+            else:
+                idle_count = 0
+            continue
+
+        # Fallback: non-blocking write test (if PJL read not supported)
+        try:
+            fd = os.open(DEV, os.O_WRONLY | os.O_NONBLOCK)
+            try:
+                os.write(fd, UEL)
+                os.close(fd)
+                idle_count += 1
+                if idle_count >= 3:
+                    log("printer ready (write-accept %dx) after %ds" % (
+                        idle_count, attempt * READY_POLL))
+                    return True
+            except BlockingIOError:
+                os.close(fd)
+                idle_count = 0
+            except OSError as e:
+                os.close(fd)
+                idle_count = 0
+                log("ready-poll write error: %s" % e)
+        except OSError:
+            idle_count = 0
+
+        if attempt % 20 == 0:
+            log("still waiting for printer (%ds)..." % (attempt * READY_POLL))
+
+    log("printer not ready after %ds" % READY_TIMEOUT)
+    return False
+
+
+def discover():
+    ensure_usblp()
+    if os.path.exists(DEV):
+        print('direct usblp://%s "USB Printer" '
+              '"USB Printer (kernel usblp driver)"' % DEV)
+    sys.exit(0)
+
+
+def print_job(filepath, job_id):
+    if filepath:
+        data = open(filepath, "rb").read()
+    else:
+        data = sys.stdin.buffer.read()
+
+    log("job %d bytes file=%s magic=%s" % (
+        len(data), filepath, data[:32].hex() if data else "empty"))
+
+    if not ensure_usblp():
+        log("usblp not available")
+        sys.exit(1)
+
+    payload = make_pjl_envelope(data, job_id)
+    log("envelope %d bytes (data %d + PJL framing)" % (len(payload), len(data)))
+
+    ok, err, elapsed = timed_write(payload, WRITE_TIMEOUT)
+
+    if not ok:
+        log("FAILED: %s (%.1fs)" % (err, elapsed))
+        sys.exit(1)
+
+    log("sent %d B in %.1fs — waiting for printer idle" % (len(data), elapsed))
+
+    if not wait_printer_ready():
+        log("printer not ready after write — next job will retry")
+        sys.exit(1)
+
+    log("job complete, printer idle")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        discover()
+
+    job_id = int(sys.argv[1]) if len(sys.argv) > 1 else int(time.time())
+    copies = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    filepath = sys.argv[6] if len(sys.argv) > 6 else None
+
+    for c in range(copies):
+        print_job(filepath, job_id * 100 + c)

@@ -1,0 +1,70 @@
+services:
+  api:
+    build: .
+    image: pacemaker-central:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Binds to 0.0.0.0 — reachable on eth0, wlan0, and pan0 (BT PAN bridge).
+      # Edge nodes POST to https://<wlan0-ip>:8443/ingest
+      # Tablet GETs   https://10.44.0.1:8443/api/...
+      - "8443:8443"
+    volumes:
+      # Persistent data: SQLite DB + raw PS + rendered PDFs
+      - data:/data
+      # TLS certs: generated on first run, or mount your own here
+      - certs:/certs
+      # GhostPDL for PCL→PDF rendering (built from source, not in Debian Bookworm)
+      - /usr/local/bin/gpdl:/usr/local/bin/gpdl:ro
+      # KardiSynch outbox: a dedicated volume mounted as a subpath of /data.
+      # Structurally separate from the `data` volume — the api container copies
+      # finished files here, but nothing else in /data is reachable through it.
+      - kardisynch-outbox:/data/kardisynch-outbox
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request, ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/api/stats', context=ctx, timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Exposes the KardiSynch outbox (only) as an SMB share for a clinic
+  # workstation running KardiSynch. Never mounts the `data` volume, so
+  # /data/pdf, /data/exports, and /data/db.sqlite are structurally
+  # unreachable from this container regardless of Samba config.
+  kardisynch-share:
+    image: ghcr.io/servercontainers/samba:smbd-a3.20-s4.20   # pin an explicit tag; verify current stable tag before deploy — never :latest for a PHI-adjacent service
+    container_name: kardisynch-share
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SAMBA_CONF_WORKGROUP: "WORKGROUP"
+      SAMBA_CONF_LOG_LEVEL: "1"
+      AVAHI_DISABLE: "1"     # no mDNS broadcast beyond the bound interface
+      WSDD2_DISABLE: "1"     # no WS-Discovery broadcast
+      NETBIOS_DISABLE: "1"   # SMB3-only clients (modern Win/macOS) don't need nmbd
+      ACCOUNT_kardisynch: "${KARDISYNCH_SMB_PASSWORD}"
+      UID_kardisynch: "1000"
+      GROUPS_kardisynch: "kardisynch"
+      SAMBA_GLOBAL_CONFIG_minproto: "server min protocol = SMB3_11"
+      SAMBA_GLOBAL_CONFIG_encrypt: "smb encrypt = required"
+      SAMBA_GLOBAL_CONFIG_guest: "map to guest = never"
+      SAMBA_VOLUME_CONFIG_outbox: "[kardisynch]; path = /shares/outbox; valid users = kardisynch; force user = kardisynch; force group = kardisynch; guest ok = no; browseable = yes; read only = no; create mask = 0664; directory mask = 0775"
+    volumes:
+      - kardisynch-outbox:/shares/outbox
+    ports:
+      # Bind ONLY to the clinic-LAN interface where the KardiSynch workstation
+      # lives — never 0.0.0.0. Keeps this off the edge-node AP (10.42.0.0/24)
+      # and the tablet's Bluetooth PAN (10.44.0.0/24).
+      - "${CENTRAL_LAN_IP}:445:445"
+    healthcheck:
+      test: ["CMD", "smbclient", "-L", "127.0.0.1", "-U", "%", "-m", "SMB3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  data:
+  certs:
+  kardisynch-outbox:

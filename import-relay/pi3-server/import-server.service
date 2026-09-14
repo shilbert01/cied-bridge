@@ -1,0 +1,15 @@
+[Unit]
+Description=Pacemaker import hub — queue between senders and presenter nodes
+After=network.target
+
+[Service]
+Type=simple
+Environment=IMPORT_QUEUE_ROOT=/var/lib/pacemaker-import-hub
+Environment=IMPORT_LISTEN_PORT=8090
+Environment=IMPORT_LEASE_SECS=120
+ExecStart=/usr/local/sbin/import-server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Bring up the USB mass-storage gadget for the import relay
+After=sys-kernel-config.mount
+Before=import-daemon.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/local/sbin/create-storage-image.sh
+ExecStart=/usr/local/sbin/setup-gadget-import.sh
+
+[Install]
+WantedBy=multi-user.target

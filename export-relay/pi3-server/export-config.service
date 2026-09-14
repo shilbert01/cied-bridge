@@ -1,0 +1,12 @@
+[Unit]
+Description=Export Relay ingest server and web UI
+After=network.target smbd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/export-config-server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

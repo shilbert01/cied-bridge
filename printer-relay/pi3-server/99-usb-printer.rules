@@ -1,0 +1,4 @@
+# Trigger CUPS auto-configuration whenever a USB printer (class 07) is plugged in.
+# The service does the actual work outside the udev context.
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="07", ACTION=="add", \
+    RUN+="/bin/systemctl --no-block start cups-autoconf-printer.service"
