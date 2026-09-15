@@ -40,6 +40,7 @@ ping -c1 -W2 "$PI" >/dev/null 2>&1 || {
 echo ">> copying updated files"
 scp "${SSH_OPTS[@]}" \
     "$SRC/printer-config-server.py" \
+    "$SRC/printer-config.service" \
     "$SRC/cups-autoconf-printer.sh" \
     "$SRC/relay-print-watchdog.sh" \
     "$SRC/relay-print-watchdog.service" \
@@ -96,7 +97,7 @@ ssh -t "${SSH_OPTS[@]}" basti@"$PI" '
     sudo install -m 755 /tmp/cups-autoconf-printer.sh /usr/local/sbin/
     sudo install -m 755 /tmp/relay-print-watchdog.sh  /usr/local/sbin/
     sudo install -m 755 /tmp/usb-reset-printer.sh     /usr/local/sbin/
-    sudo install -m 644 /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer /etc/systemd/system/
+    sudo install -m 644 /tmp/printer-config.service /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer /etc/systemd/system/
 
     # State dir for custom node names.
     sudo mkdir -p /var/lib/relay-ui
