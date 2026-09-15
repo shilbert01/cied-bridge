@@ -5,6 +5,7 @@ Serves http://10.99.0.1/ on the relayap WiFi.
 """
 
 import json
+import os
 import re
 import socket
 import subprocess
@@ -639,7 +640,8 @@ def _usb_diag() -> dict:
     # CUPS queue state
     try:
         out = subprocess.check_output(["lpstat", "-p", QUEUE], text=True,
-                                       stderr=subprocess.DEVNULL, timeout=CMD_TIMEOUT)
+                                       stderr=subprocess.DEVNULL, timeout=CMD_TIMEOUT,
+                                       env={**os.environ, "LANG": "C"})
         diag["queue_enabled"] = "enabled" in out.lower()
         diag["queue_idle"] = "idle" in out.lower()
     except Exception:
