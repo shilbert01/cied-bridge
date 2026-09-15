@@ -62,6 +62,103 @@ def _available_probe() -> list[str]:
         return []
 
 
+# ── USB printer scanner ─────────────────────────────────────────────────────
+
+_PRINTER_CLASS = 7
+_PROTO_NAMES = {1: "Unidirectional", 2: "Bidirectional", 3: "IEEE 1284.4", 4: "IPP-over-USB"}
+
+def _scan_usb_printers() -> list[dict]:
+    """Scan USB bus for printer-class devices and their interface protocols."""
+    try:
+        out = subprocess.check_output(["lsusb"], text=True, timeout=5)
+    except Exception:
+        return []
+
+    printers = []
+    for line in out.splitlines():
+        m = re.match(r"Bus \d+ Device \d+: ID ([0-9a-f]{4}):([0-9a-f]{4})\s+(.*)", line, re.I)
+        if not m:
+            continue
+        vid, pid, desc = m.group(1), m.group(2), m.group(3).strip()
+        # Check if this device has a printer-class interface
+        try:
+            detail = subprocess.check_output(
+                ["lsusb", "-v", "-d", f"{vid}:{pid}"],
+                text=True, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            continue
+        protocols = []
+        in_printer = False
+        for dl in detail.splitlines():
+            dl = dl.strip()
+            if dl.startswith("bInterfaceClass") and str(_PRINTER_CLASS) in dl and "Printer" in dl:
+                in_printer = True
+            elif dl.startswith("bInterfaceClass") and in_printer:
+                in_printer = False
+            elif dl.startswith("bInterfaceProtocol") and in_printer:
+                pm = re.search(r"(\d+)", dl)
+                if pm:
+                    protocols.append(int(pm.group(1)))
+        if not protocols:
+            continue
+
+        has_ipp = 4 in protocols
+        transport = "ipp-usb" if has_ipp else "usblp"
+        printers.append({
+            "vid": vid, "pid": pid, "name": desc,
+            "protocols": sorted(set(protocols)),
+            "proto_names": [_PROTO_NAMES.get(p, f"proto-{p}") for p in sorted(set(protocols))],
+            "has_ipp": has_ipp,
+            "transport": transport,
+        })
+    return printers
+
+
+def _setup_printer(vid_pid: str, transport: str) -> str:
+    """Configure the print queue for a specific printer and transport."""
+    msgs = []
+
+    if transport == "ipp-usb":
+        # Stop usblp, start ipp-usb
+        subprocess.run(["rmmod", "usblp"], capture_output=True, timeout=5)
+        subprocess.run(["systemctl", "unmask", "ipp-usb", "ipp-usb.socket"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["systemctl", "start", "ipp-usb"],
+                       capture_output=True, timeout=SLOW_TIMEOUT)
+        time.sleep(3)
+        try:
+            with socket.create_connection(("localhost", 60000), timeout=5):
+                msgs.append("ipp-usb active on port 60000")
+        except OSError:
+            msgs.append("WARNING: ipp-usb not responding on port 60000")
+        subprocess.run(["lpadmin", "-p", QUEUE, "-v", "ipp://localhost:60000/ipp/print",
+                        "-m", "everywhere", "-E"], check=True, timeout=CMD_TIMEOUT)
+        msgs.append("Queue: ipp://localhost:60000/ipp/print (everywhere)")
+
+    elif transport == "usblp":
+        # Stop ipp-usb, load usblp
+        subprocess.run(["systemctl", "stop", "ipp-usb"],
+                       capture_output=True, timeout=SLOW_TIMEOUT)
+        subprocess.run(["modprobe", "usblp"], capture_output=True, timeout=5)
+        time.sleep(1)
+        if Path("/dev/usb/lp0").exists():
+            msgs.append("/dev/usb/lp0 available")
+        else:
+            msgs.append("WARNING: /dev/usb/lp0 not found")
+        subprocess.run(["lpadmin", "-p", QUEUE, "-v", "usblp:///dev/usb/lp0",
+                        "-m", "raw", "-E"], capture_output=True, timeout=CMD_TIMEOUT)
+        msgs.append("Queue: usblp:///dev/usb/lp0 (raw)")
+
+    else:
+        return f"Unknown transport: {transport}"
+
+    subprocess.run(["cupsenable", QUEUE], capture_output=True, timeout=CMD_TIMEOUT)
+    subprocess.run(["cupsaccept", QUEUE], capture_output=True, timeout=CMD_TIMEOUT)
+    msgs.append("Queue enabled")
+    _probe_refresh()
+    return " → ".join(msgs)
+
+
 # ── CUPS probe cache ─────────────────────────────────────────────────────────
 # Measured inside the running service (as root, which is when the CUPS backends
 # actually probe):
@@ -74,6 +171,8 @@ def _available_probe() -> list[str]:
 _probe_lock    = threading.Lock()
 _probe_devices: list[str] = []
 _probe_uri: str | None    = None
+_scan_results: list[dict] = []
+_scan_time: float = 0.0
 
 
 def _current_uri() -> str | None:
@@ -705,7 +804,6 @@ def _btn(action: str, **fields) -> str:
 
 def _page(message: str = "", error: bool = False) -> bytes:
     cur        = _current_uri()
-    printers   = _available()
     preserve   = _preserve_enabled()
     jobs       = _all_jobs()
     names      = _node_names()
@@ -725,16 +823,28 @@ def _page(message: str = "", error: bool = False) -> bytes:
     samba_st     = _samba_status()
     diag         = _usb_diag()
 
-    # ── printer rows
-    printer_rows = ""
-    for uri in printers:
-        active = " ✓" if uri == cur else ""
-        printer_rows += (
-            f'<tr><td class="uri">{uri}{active}</td>'
-            f'<td>{_btn("configure", uri=uri) if uri != cur else "<span style=color:#888>Active</span>"}</td></tr>'
+    # ── scanned printer rows
+    with _probe_lock:
+        scanned = list(_scan_results)
+        scan_age = time.monotonic() - _scan_time if _scan_time else None
+    scan_rows = ""
+    for sp in scanned:
+        protos = ", ".join(sp["proto_names"])
+        rec = sp["transport"]
+        rec_label = "ipp-usb (recommended)" if sp["has_ipp"] else "usblp (raw)"
+        vid_pid = f'{sp["vid"]}:{sp["pid"]}'
+        scan_rows += (
+            f'<tr><td><strong>{sp["name"]}</strong><br>'
+            f'<span class="sub">{vid_pid}</span></td>'
+            f'<td style="font-size:0.85em">{protos}</td>'
+            f'<td>{"<span class=ok>IPP-USB</span>" if sp["has_ipp"] else "<span style=color:#888>No</span>"}</td>'
+            f'<td><form method="post" action="/setup_printer" style="display:inline">'
+            f'<input type="hidden" name="vid_pid" value="{vid_pid}">'
+            f'<input type="hidden" name="transport" value="{rec}">'
+            f'<button type="submit">Use ({rec_label})</button></form></td></tr>'
         )
-    if not printer_rows:
-        printer_rows = '<tr><td colspan="2" class="empty">No USB printers detected — plug one in and refresh.</td></tr>'
+    if not scan_rows and scan_age is not None:
+        scan_rows = '<tr><td colspan="4" class="empty">No USB printers found. Check cable and power.</td></tr>'
 
     # ── job rows
     job_rows = ""
@@ -859,8 +969,18 @@ def _page(message: str = "", error: bool = False) -> bytes:
     <h2>Active printer</h2>
     <div class="cur">{cur or "Not configured"}</div>
 
-    <h2>Available USB printers</h2>
-    <table>{printer_rows}</table>
+    <h2>Search for printers</h2>
+    <form method="post" action="/scan_printers" style="margin-bottom:0.6em">
+      <button type="submit">Scan USB</button>
+      <span style="font-size:0.85em;color:#888;margin-left:0.5em">
+        {f'Last scan: {int(scan_age)}s ago' if scan_age is not None else 'Not scanned yet'}
+      </span>
+    </form>
+    {'<table><tr><th>Printer</th><th>Protocols</th><th>IPP-USB</th><th>Action</th></tr>' + scan_rows + '</table>' if scan_rows else ''}
+    <p style="font-size:0.82em;color:#888;margin-top:0.5em">
+      Printers with IPP-over-USB (protocol 4) use <b>ipp-usb</b> for reliable consecutive printing.<br>
+      Older printers without protocol 4 use <b>usblp</b> with raw mode.
+    </p>
 
     <h2>Print settings</h2>
     {tray_widget}
@@ -1045,6 +1165,23 @@ class _Handler(BaseHTTPRequestHandler):
             elif self.path == "/clear_export":
                 n = _clear_export_files()
                 self._send(_page(f"Cleared {n} file(s) from export share."))
+
+            elif self.path == "/scan_printers":
+                global _scan_results, _scan_time
+                results = _scan_usb_printers()
+                with _probe_lock:
+                    _scan_results = results
+                    _scan_time = time.monotonic()
+                n = len(results)
+                self._send(_page(f"Found {n} printer{'s' if n != 1 else ''}."))
+
+            elif self.path == "/setup_printer":
+                vid_pid = p.get("vid_pid", [""])[0]
+                transport = p.get("transport", [""])[0]
+                if not vid_pid or not transport:
+                    raise ValueError("Missing printer or transport")
+                msg = _setup_printer(vid_pid, transport)
+                self._send(_page(f"Configured: {msg}"))
 
             elif self.path == "/diag_test_print":
                 msg = _usb_test_print()
