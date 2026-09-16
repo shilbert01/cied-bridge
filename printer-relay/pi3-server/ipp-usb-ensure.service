@@ -1,0 +1,12 @@
+[Unit]
+Description=Ensure ipp-usb is running after boot
+After=cups.service network.target
+Wants=cups.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'systemctl start ipp-usb 2>/dev/null; sleep 2; URI=$(LANG=C lpstat -v LaserPrinter 2>/dev/null | awk "{print \\$NF}"); if [ "$URI" != "ipp://localhost:60000/ipp/print" ] && curl -s -o /dev/null http://localhost:60000/ipp/print 2>/dev/null; then lpadmin -p LaserPrinter -v ipp://localhost:60000/ipp/print -m everywhere -E; fi'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

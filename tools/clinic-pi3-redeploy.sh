@@ -41,6 +41,7 @@ echo ">> copying updated files"
 scp "${SSH_OPTS[@]}" \
     "$SRC/printer-config-server.py" \
     "$SRC/printer-config.service" \
+    "$SRC/ipp-usb-ensure.service" \
     "$SRC/cups-autoconf-printer.sh" \
     "$SRC/relay-print-watchdog.sh" \
     "$SRC/relay-print-watchdog.service" \
@@ -97,41 +98,25 @@ ssh -t "${SSH_OPTS[@]}" basti@"$PI" '
     sudo install -m 755 /tmp/cups-autoconf-printer.sh /usr/local/sbin/
     sudo install -m 755 /tmp/relay-print-watchdog.sh  /usr/local/sbin/
     sudo install -m 755 /tmp/usb-reset-printer.sh     /usr/local/sbin/
-    sudo install -m 644 /tmp/printer-config.service /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer /etc/systemd/system/
+    sudo install -m 644 /tmp/printer-config.service /tmp/ipp-usb-ensure.service /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer /etc/systemd/system/
 
     # State dir for custom node names.
     sudo mkdir -p /var/lib/relay-ui
 
-    # Clear stale autoconf decision (old cache may reference ipp-usb).
+    # Clear stale autoconf decision so the new protocol-aware script re-detects.
     sudo rm -f /var/lib/printer-autoconf/decision
 
-    # Stop + mask ipp-usb (we use kernel usblp driver, not libusb).
-    sudo systemctl stop ipp-usb 2>/dev/null || true
-    sudo systemctl disable ipp-usb 2>/dev/null || true
-    sudo systemctl mask ipp-usb ipp-usb.socket 2>/dev/null || true
-
-    # ipp-usb: IPP-over-USB (protocol 4) replaces usblp (protocol 2).
-    # HP Color LaserJet Pro MFP 3302 firmware permanently NAKs protocol-2
-    # bulk-OUT after large PostScript jobs; IPP-USB uses separate endpoints.
+    # Install ipp-usb (needed for protocol-4 printers like HP 3302).
     sudo apt-get install -y ipp-usb 2>/dev/null || true
     echo "blacklist usblp" | sudo tee /etc/modprobe.d/blacklist-usblp.conf >/dev/null
     sudo rmmod usblp 2>/dev/null || true
-    sudo systemctl unmask ipp-usb 2>/dev/null || true
-    sudo systemctl unmask ipp-usb.socket 2>/dev/null || true
+    sudo systemctl unmask ipp-usb ipp-usb.socket 2>/dev/null || true
     sudo rm -f /usr/lib/cups/backend/usblp
     [ -f /usr/lib/cups/backend/usb ] && sudo chmod 755 /usr/lib/cups/backend/usb 2>/dev/null || true
 
-    # Wait for ipp-usb to detect the printer (udev-activated)
-    sudo systemctl start ipp-usb 2>/dev/null || true
-    sleep 3
-
-    # Switch queue to ipp-usb
-    IPP_URI="ipp://localhost:60000/ipp/print"
-    CURRENT_URI=$(lpstat -v LaserPrinter 2>/dev/null | awk "{print \$NF}" || true)
-    if [ -n "$CURRENT_URI" ] && [ "$CURRENT_URI" != "$IPP_URI" ]; then
-        sudo lpadmin -p LaserPrinter -v "$IPP_URI" -m everywhere -E
-        echo "   queue switched to $IPP_URI (was $CURRENT_URI)"
-    fi
+    # Let autoconf detect the right transport (ipp-usb vs usblp) at boot.
+    sudo systemctl enable ipp-usb-ensure 2>/dev/null || true
+    sudo /usr/local/sbin/cups-autoconf-printer.sh &
 
     # Fast ARP expiry + hostapd inactivity so reconnecting edge nodes
     # (ESP32, Pi Zero) aren't blocked by stale state after a replug.
