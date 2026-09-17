@@ -1,0 +1,8 @@
+#!/bin/bash
+# NOPASSWD deploy hook: installs printer-config-server.py + service from /tmp.
+# Called by clinic-pi3-redeploy.sh and manual scp+deploy workflows.
+set -e
+install -m 755 /tmp/printer-config-server.py /usr/local/sbin/printer-config-server.py
+[ -f /tmp/printer-config.service ] && install -m 644 /tmp/printer-config.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl restart printer-config 2>/dev/null || true

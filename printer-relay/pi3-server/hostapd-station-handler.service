@@ -1,0 +1,13 @@
+[Unit]
+Description=Auto-flush ARP on WiFi station connect/disconnect
+After=hostapd.service
+Requires=hostapd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/hostapd_cli -i wlan0 -p /var/run/hostapd -a /usr/local/sbin/hostapd-station-handler.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

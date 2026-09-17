@@ -48,6 +48,8 @@ scp "${SSH_OPTS[@]}" \
     "$SRC/relay-print-watchdog.timer" \
     "$SRC/usblp-backend" \
     "$SRC/usb-reset-printer.sh" \
+    "$SRC/hostapd-station-handler.sh" \
+    "$SRC/hostapd-station-handler.service" \
     "$TOOLS/feature-lib.sh" \
     "$TOOLS/configure-clinic.sh" \
     "$TOOLS/clinic.conf.example" \
@@ -98,7 +100,8 @@ ssh -t "${SSH_OPTS[@]}" basti@"$PI" '
     sudo install -m 755 /tmp/cups-autoconf-printer.sh /usr/local/sbin/
     sudo install -m 755 /tmp/relay-print-watchdog.sh  /usr/local/sbin/
     sudo install -m 755 /tmp/usb-reset-printer.sh     /usr/local/sbin/
-    sudo install -m 644 /tmp/printer-config.service /tmp/ipp-usb-ensure.service /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer /etc/systemd/system/
+    sudo install -m 644 /tmp/printer-config.service /tmp/ipp-usb-ensure.service /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer /tmp/hostapd-station-handler.service /etc/systemd/system/
+    sudo install -m 755 /tmp/hostapd-station-handler.sh /usr/local/sbin/
 
     # State dir for custom node names.
     sudo mkdir -p /var/lib/relay-ui
@@ -118,15 +121,25 @@ ssh -t "${SSH_OPTS[@]}" basti@"$PI" '
     sudo systemctl enable ipp-usb-ensure 2>/dev/null || true
     sudo /usr/local/sbin/cups-autoconf-printer.sh &
 
-    # Fast ARP expiry + hostapd inactivity so reconnecting edge nodes
-    # (ESP32, Pi Zero) aren't blocked by stale state after a replug.
-    cat <<SYSEOF | sudo tee /etc/sysctl.d/90-wlan0-arp.conf >/dev/null
-net.ipv4.neigh.wlan0.base_reachable_time_ms = 5000
-net.ipv4.neigh.wlan0.gc_stale_time = 5
-net.ipv4.neigh.wlan0.delay_first_probe_time = 1
-SYSEOF
-    sudo sysctl -p /etc/sysctl.d/90-wlan0-arp.conf 2>/dev/null || true
-    sudo sed -i "s/^ap_max_inactivity=.*/ap_max_inactivity=5/" /etc/hostapd/hostapd.conf 2>/dev/null || true
+    # Remove overly aggressive ARP settings that expired entries in 5s
+    # (the watchdog was deauthing live stations whose entries went STALE).
+    # Default kernel ARP timings are fine; station cleanup is event-driven
+    # via hostapd-station-handler.service.
+    sudo rm -f /etc/sysctl.d/90-wlan0-arp.conf
+    sudo sysctl -w net.ipv4.neigh.wlan0.base_reachable_time_ms=30000 2>/dev/null || true
+    sudo sysctl -w net.ipv4.neigh.wlan0.gc_stale_time=60 2>/dev/null || true
+    # Remove stale aggressive-timeout settings that kick idle-but-alive stations.
+    sudo sed -i "/^ap_max_inactivity=5$/d" /etc/hostapd/hostapd.conf 2>/dev/null || true
+    sudo sed -i "/^skip_inactivity_poll=/d" /etc/hostapd/hostapd.conf 2>/dev/null || true
+
+    # hostapd control interface (needed for hostapd_cli deauth in watchdog/flush).
+    if ! sudo grep -q "^ctrl_interface=" /etc/hostapd/hostapd.conf 2>/dev/null; then
+        printf "ctrl_interface=/var/run/hostapd\nctrl_interface_group=0\n" | sudo tee -a /etc/hostapd/hostapd.conf >/dev/null
+        echo "   added hostapd ctrl_interface"
+    fi
+
+    # Auto-flush ARP on station connect/disconnect (eliminates manual flush).
+    sudo systemctl enable --now hostapd-station-handler 2>/dev/null || true
 
     # dwc2 overlay in config.txt (requires reboot to take effect).
     BOOT_CONFIG="/boot/firmware/config.txt"
@@ -139,6 +152,12 @@ SYSEOF
         fi
         echo "   *** dtoverlay=dwc2 added — REBOOT REQUIRED ***"
     fi
+    # DS3231 RTC overlay (I2C).
+    if [ -f "$BOOT_CONFIG" ] && ! grep -q "dtoverlay=i2c-rtc,ds3231" "$BOOT_CONFIG"; then
+        sudo sed -i "/^\[all\]/a dtoverlay=i2c-rtc,ds3231" "$BOOT_CONFIG"
+        echo "   *** dtoverlay=i2c-rtc,ds3231 added — REBOOT REQUIRED ***"
+    fi
+
     BOOT_CMDLINE="/boot/firmware/cmdline.txt"
     if [ -f "$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "$BOOT_CMDLINE"; then
         sudo sed -i "s/ *dwc_otg\.speed=[0-9]*//" "$BOOT_CMDLINE"

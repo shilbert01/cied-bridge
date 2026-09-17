@@ -18,20 +18,12 @@ PATH=/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 needs_heal=0
 reason=""
 
-# ── Flush stale ARP entries on the relay AP interface ────────────────────
-# When an ESP32/Pi Zero reboots, stale neighbour + hostapd state can block
-# reassociation. Flush FAILED/STALE/INCOMPLETE ARP and deauth MACs that
-# hostapd still thinks are associated but aren't responding.
+# ── Flush only genuinely dead ARP entries ────────────────────────────────
+# Only flush FAILED entries (host confirmed unreachable). STALE entries are
+# normal for idle-but-alive stations — flushing them + deauthing based on
+# their absence was kicking connected ESP32/Pi Zero devices every 30s.
+# Station lifecycle is now handled by hostapd-station-handler.service.
 ip neigh flush dev wlan0 nud failed 2>/dev/null
-ip neigh flush dev wlan0 nud stale 2>/dev/null
-ip neigh flush dev wlan0 nud incomplete 2>/dev/null
-hostapd_cli all_sta 2>/dev/null | awk '/^[0-9a-f]{2}:/{print $1}' | while read mac; do
-    if ip neigh show dev wlan0 2>/dev/null | grep -q "$mac"; then
-        :
-    else
-        hostapd_cli deauthenticate "$mac" 2>/dev/null
-    fi
-done
 
 # ── Check: queue disabled ──────────────────────────────────────────────────
 state=$(LANG=C lpstat -p "$QUEUE" 2>/dev/null | head -1)
