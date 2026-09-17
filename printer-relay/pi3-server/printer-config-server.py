@@ -756,6 +756,37 @@ def _usb_reset() -> str:
     return " → ".join(msgs) + "."
 
 
+def _wifi_flush_arp() -> str:
+    """Flush stale ARP entries and deauth orphaned hostapd stations."""
+    msgs = []
+    for state in ("failed", "stale", "incomplete"):
+        subprocess.run(["ip", "neigh", "flush", "dev", "wlan0", "nud", state],
+                       capture_output=True, timeout=CMD_TIMEOUT)
+    msgs.append("ARP cache flushed")
+
+    try:
+        r = subprocess.run(["hostapd_cli", "all_sta"], capture_output=True,
+                           text=True, timeout=CMD_TIMEOUT)
+        neigh = subprocess.run(["ip", "neigh", "show", "dev", "wlan0"],
+                               capture_output=True, text=True, timeout=CMD_TIMEOUT)
+        neigh_out = neigh.stdout
+        deauthed = 0
+        for line in r.stdout.splitlines():
+            mac = line.strip()
+            if len(mac) == 17 and mac.count(":") == 5 and mac not in neigh_out:
+                subprocess.run(["hostapd_cli", "deauthenticate", mac],
+                               capture_output=True, timeout=CMD_TIMEOUT)
+                deauthed += 1
+        if deauthed:
+            msgs.append(f"deauthenticated {deauthed} stale station(s)")
+        else:
+            msgs.append("no stale stations")
+    except Exception as exc:
+        msgs.append(f"hostapd check failed: {exc}")
+
+    return " → ".join(msgs) + "."
+
+
 # ── HTML rendering ────────────────────────────────────────────────────────────
 
 CSS = """
@@ -1038,12 +1069,15 @@ def _page(message: str = "", error: bool = False) -> bytes:
       <form method="post" action="/diag_usb_reset"
             onsubmit="return confirm('This will cancel all jobs and reset the USB printer connection. Continue?')">
         <button type="submit" class="danger">Reset printer connection</button></form>
+      <form method="post" action="/diag_flush_arp"><button type="submit">Flush WiFi clients</button></form>
     </div>
     <p style="font-size:0.85em;color:#555;margin:0.6em 0">
       <b>Test print</b> — sends a one-line test page to verify the printer works.<br>
       <b>Reset printer connection</b> — cancels all jobs, restarts ipp-usb,
       and re-enables the queue.
       Use this when jobs are stuck or the printer stops responding.<br>
+      <b>Flush WiFi clients</b> — clears stale ARP entries and deauthenticates
+      orphaned stations. Use when an ESP32 is stuck blinking red after reconnect.<br>
       If reset does not help, <b>power cycle the printer</b> (turn off, wait 10 seconds, turn on).
     </p>
 
@@ -1191,6 +1225,10 @@ class _Handler(BaseHTTPRequestHandler):
 
             elif self.path == "/diag_usb_reset":
                 msg = _usb_reset()
+                self._send(_page(msg))
+
+            elif self.path == "/diag_flush_arp":
+                msg = _wifi_flush_arp()
                 self._send(_page(msg))
 
             else:
