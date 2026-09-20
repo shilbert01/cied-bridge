@@ -138,6 +138,16 @@ ssh -t "${SSH_OPTS[@]}" basti@"$PI" '
         echo "   added hostapd ctrl_interface"
     fi
 
+    # Country code + 802.11d for proper regulatory TX power.
+    if ! sudo grep -q "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null; then
+        printf "country_code=DE\nieee80211d=1\n" | sudo tee -a /etc/hostapd/hostapd.conf >/dev/null
+        echo "   added country_code=DE"
+    fi
+
+    # Disable WiFi power save on the AP — avoids delayed beacons that
+    # cause weak-signal stations to lose sync.
+    sudo iw dev wlan0 set power_save off 2>/dev/null || true
+
     # Auto-flush ARP on station connect/disconnect (eliminates manual flush).
     sudo systemctl enable --now hostapd-station-handler 2>/dev/null || true
 
