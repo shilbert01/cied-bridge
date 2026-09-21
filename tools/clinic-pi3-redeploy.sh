@@ -1,23 +1,28 @@
 #!/bin/bash
-# clinic-pi3-redeploy.sh
+# clinic-pi3-redeploy.sh — idempotent hub provisioner.
 #
-# QUEUED redeploy for the CLINIC Pi3 (10.99.0.1) — run from the laptop when you're
-# next on the clinic relay network (USB-WiFi stick / relayap). The HOME printrelay
-# Pi3 already has all of this; the clinic one is behind.
+# Works on BOTH a fresh Raspberry Pi OS and an already-configured hub.
+# Fresh: installs packages, configures AP + CUPS + Samba, deploys all code.
+# Existing: updates code + configs, skips what's already in place.
 #
-# Brings the clinic Pi3 up to date:
-#   WEB UI — tabbed layout (Jobs/Printers/Nodes), custom node names, source column.
-#   AUTOCONF — usb:// direct (ipp-usb stopped+masked), raw pass-through, cached.
-#   WATCHDOG — re-enables disabled queue, cancels stuck jobs.
-#   EXPORT — Samba share (\\PI3\import), export ingest server, import hub.
-#   FEATURE FLAGS — clinic.conf toggles for each role.
+# Usage:
+#   PI=192.168.179.110 REMOTE_USER=pi bash tools/clinic-pi3-redeploy.sh
+#   PI=10.99.0.1 bash tools/clinic-pi3-redeploy.sh       # defaults: REMOTE_USER=basti
+#   bash tools/clinic-pi3-redeploy.sh                     # PI=10.99.0.1 REMOTE_USER=basti
 #
-# Usage (interactive — prompts once for the Pi's sudo password):
-#   bash tools/clinic-pi3-redeploy.sh
+# Environment:
+#   PI           — target IP (default 10.99.0.1)
+#   REMOTE_USER  — SSH user (default basti)
+#   AP_SSID      — relay AP SSID (default relayap)
+#   AP_PASS      — relay AP passphrase (default RelayPrint#1)
+#   AP_CHANNEL   — WiFi channel (default 6)
+#   AP_HIDDEN    — on/off (default off)
+#   CLINIC_FLAGS — extra flags for configure-clinic.sh
 
 set -euo pipefail
 
-PI=10.99.0.1
+PI="${PI:-10.99.0.1}"
+REMOTE_USER="${REMOTE_USER:-basti}"
 KEY="$HOME/.ssh/id_ed25519"
 SSH_OPTS=(-o IdentitiesOnly=yes -i "$KEY")
 SRC="$(cd "$(dirname "$0")/../printer-relay/pi3-server" && pwd)"
@@ -25,20 +30,29 @@ EXPORT_SRC="$(cd "$(dirname "$0")/../export-relay/pi3-server" && pwd)"
 IMPORT_SRC="$(cd "$(dirname "$0")/../import-relay/pi3-server" && pwd)"
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
 
-# Optional: pass feature toggles to configure-clinic.sh on the Pi3, e.g.
-#   CLINIC_FLAGS="--printer-webui=on --samba=off" bash tools/clinic-pi3-redeploy.sh
-# With no flags: a manifest is seeded from the example only if none exists (all
-# Pi3 features on = legacy behavior), then the current manifest's toggles are applied.
+: "${AP_SSID:=relayap}"
+: "${AP_PASS:=RelayPrint#1}"
+: "${AP_CHANNEL:=6}"
+: "${AP_HIDDEN:=off}"
+: "${WIFI_COUNTRY:=DE}"
 CLINIC_FLAGS="${CLINIC_FLAGS:-}"
 
-echo ">> checking reachability of clinic Pi3 ($PI)"
-ping -c1 -W2 "$PI" >/dev/null 2>&1 || {
-    echo "!! $PI not reachable — are you on the clinic relay network (relayap via the stick)?"
-    exit 1
-}
+AP_IP=10.99.0.1
+AP_DHCP_START=10.99.0.10
+AP_DHCP_END=10.99.0.50
+AP_HIDE=$([ "$(printf %s "$AP_HIDDEN" | tr A-Z a-z)" = on ] && echo 2 || echo 0)
 
-echo ">> copying updated files"
-scp "${SSH_OPTS[@]}" \
+_ssh()  { ssh  "${SSH_OPTS[@]}" "$REMOTE_USER@$PI" "$@"; }
+_ssht() { ssh -t "${SSH_OPTS[@]}" "$REMOTE_USER@$PI" "$@"; }
+_scp()  { scp  "${SSH_OPTS[@]}" "$@" "$REMOTE_USER@$PI":/tmp/; }
+
+echo ">> checking reachability of Pi3 ($PI as $REMOTE_USER)"
+ping -c1 -W2 "$PI" >/dev/null 2>&1 || { echo "!! $PI not reachable"; exit 1; }
+_ssh 'hostname' || { echo "!! SSH failed"; exit 1; }
+
+# ── Copy files ───────────────────────────────────────────────────────────────
+echo ">> copying files"
+_scp \
     "$SRC/printer-config-server.py" \
     "$SRC/printer-config.service" \
     "$SRC/ipp-usb-ensure.service" \
@@ -50,162 +64,327 @@ scp "${SSH_OPTS[@]}" \
     "$SRC/usb-reset-printer.sh" \
     "$SRC/hostapd-station-handler.sh" \
     "$SRC/hostapd-station-handler.service" \
+    "$SRC/99-usb-printer.rules" \
     "$TOOLS/feature-lib.sh" \
     "$TOOLS/configure-clinic.sh" \
-    "$TOOLS/clinic.conf.example" \
-    basti@"$PI":/tmp/
+    "$TOOLS/clinic.conf.example"
 
-# Export + import hub files (optional — deploy script works even if tree is incomplete)
-[ -f "$EXPORT_SRC/export-config-server.py" ] && scp "${SSH_OPTS[@]}" \
+[ -f "$SRC/deploy-printer-config" ] && _scp "$SRC/deploy-printer-config"
+
+[ -f "$EXPORT_SRC/export-config-server.py" ] && _scp \
     "$EXPORT_SRC/export-config-server.py" \
-    "$EXPORT_SRC/export-config.service" \
-    basti@"$PI":/tmp/ && echo "   + export server"
-[ -f "$IMPORT_SRC/import-server.py" ] && scp "${SSH_OPTS[@]}" \
+    "$EXPORT_SRC/export-config.service" && echo "   + export server"
+[ -f "$IMPORT_SRC/import-server.py" ] && _scp \
     "$IMPORT_SRC/import-server.py" \
-    "$IMPORT_SRC/import-server.service" \
-    basti@"$PI":/tmp/ && echo "   + import hub"
+    "$IMPORT_SRC/import-server.service" && echo "   + import hub"
 
-echo ">> [manifest] deploy feature machinery + apply clinic.conf toggles (needs sudo password)"
-ssh -t "${SSH_OPTS[@]}" basti@"$PI" "
-    set -e
-    sudo install -m 755 /tmp/feature-lib.sh      /usr/local/sbin/feature-lib.sh
-    sudo install -m 755 /tmp/configure-clinic.sh /usr/local/sbin/configure-clinic.sh
-    sudo install -d -m 755 /etc/pacemaker
+# ── Generate remote setup script with config values baked in ─────────────────
+REMOTE_SCRIPT=$(mktemp)
+trap 'rm -f "$REMOTE_SCRIPT"' EXIT
 
-    # Seed a manifest only if none exists (example = all Pi3 features on = legacy).
-    if [ ! -f /etc/pacemaker/clinic.conf ]; then
-        sudo install -m 600 /tmp/clinic.conf.example /etc/pacemaker/clinic.conf
-        echo '   seeded /etc/pacemaker/clinic.conf from example (all Pi3 features on)'
+cat > "$REMOTE_SCRIPT" << ENDSCRIPT
+#!/bin/bash
+set -e
+
+AP_SSID="$AP_SSID"
+AP_PASS="$AP_PASS"
+AP_CHANNEL="$AP_CHANNEL"
+AP_HIDE="$AP_HIDE"
+AP_IP="$AP_IP"
+AP_DHCP_START="$AP_DHCP_START"
+AP_DHCP_END="$AP_DHCP_END"
+WIFI_COUNTRY="$WIFI_COUNTRY"
+
+# ── Detect fresh system ─────────────────────────────────────────────────────
+FRESH=0
+which hostapd >/dev/null 2>&1 || FRESH=1
+which cups >/dev/null 2>&1    || FRESH=1
+
+if [ "\$FRESH" = 1 ]; then
+    echo ">> [fresh system] installing packages"
+    sudo apt-get update -qq
+    sudo apt-get install -y hostapd dnsmasq cups cups-bsd chrony samba ipp-usb rfkill
+fi
+
+# ── Feature manifest ────────────────────────────────────────────────────────
+sudo install -m 755 /tmp/feature-lib.sh      /usr/local/sbin/feature-lib.sh
+sudo install -m 755 /tmp/configure-clinic.sh /usr/local/sbin/configure-clinic.sh
+sudo install -d -m 755 /etc/pacemaker
+if [ ! -f /etc/pacemaker/clinic.conf ]; then
+    sudo install -m 600 /tmp/clinic.conf.example /etc/pacemaker/clinic.conf
+    echo '   seeded clinic.conf'
+fi
+
+# ── Relay AP (hostapd + dnsmasq + static IP) ────────────────────────────────
+if [ "\$FRESH" = 1 ] || [ ! -f /etc/hostapd/hostapd.conf ]; then
+    echo ">> [AP] configuring hostapd + dnsmasq"
+
+    sudo rfkill unblock wifi 2>/dev/null || sudo rfkill unblock wlan 2>/dev/null || true
+    sudo iw reg set "\$WIFI_COUNTRY" 2>/dev/null || true
+
+    # Prevent NetworkManager from touching wlan0
+    sudo mkdir -p /etc/NetworkManager/conf.d
+    printf '[keyfile]\nunmanaged-devices=interface-name:wlan0\n' | sudo tee /etc/NetworkManager/conf.d/99-relay-ap.conf >/dev/null
+    sudo systemctl restart NetworkManager 2>/dev/null || true
+
+    sudo tee /etc/hostapd/hostapd.conf >/dev/null << EOF
+interface=wlan0
+driver=nl80211
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
+ssid=\$AP_SSID
+ignore_broadcast_ssid=\$AP_HIDE
+hw_mode=g
+channel=\$AP_CHANNEL
+country_code=\$WIFI_COUNTRY
+ieee80211d=1
+ieee80211n=1
+wmm_enabled=1
+auth_algs=1
+wpa=2
+wpa_passphrase=\$AP_PASS
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+EOF
+    sudo chmod 600 /etc/hostapd/hostapd.conf
+    sudo sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+
+    # rfkill unblock before hostapd starts
+    sudo mkdir -p /etc/systemd/system/hostapd.service.d
+    printf '[Service]\nExecStartPre=/usr/sbin/rfkill unblock wlan\n' | sudo tee /etc/systemd/system/hostapd.service.d/rfkill-unblock.conf >/dev/null
+
+    # Static IP via systemd oneshot
+    sudo tee /etc/systemd/system/relay-ap-ip.service >/dev/null << EOF
+[Unit]
+Description=Static IP for relay AP (wlan0)
+After=hostapd.service
+Requires=hostapd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/ip addr add \$AP_IP/24 dev wlan0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable relay-ap-ip.service
+
+    sudo ip addr add "\$AP_IP/24" dev wlan0 2>/dev/null || true
+    sudo ip link set wlan0 up 2>/dev/null || true
+
+    # dnsmasq
+    [ -f /etc/dnsmasq.conf ] && [ ! -f /etc/dnsmasq.conf.orig ] && sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
+    sudo tee /etc/dnsmasq.d/relay-ap.conf >/dev/null << EOF
+interface=wlan0
+bind-dynamic
+dhcp-range=\$AP_DHCP_START,\$AP_DHCP_END,12h
+EOF
+
+    # chrony — NTP server for relay nodes
+    if ! grep -q "local stratum 10" /etc/chrony/chrony.conf 2>/dev/null; then
+        printf '\nlocal stratum 10\nallow 10.99.0.0/24\n' | sudo tee -a /etc/chrony/chrony.conf >/dev/null
     fi
-    # Apply any requested toggles (no-op when CLINIC_FLAGS is empty).
-    if [ -n '$CLINIC_FLAGS' ]; then
-        sudo /usr/local/sbin/configure-clinic.sh -y $CLINIC_FLAGS
-    fi
 
-    # Enable/disable Pi3 feature services per the manifest (active teardown).
-    # clinic.conf is root-only (600), so source + apply entirely inside sudo.
-    sudo sh -c '. /usr/local/sbin/feature-lib.sh; . /etc/pacemaker/clinic.conf
-        apply_feature_service FEATURE_SAMBA_SHARE    \"smbd nmbd export-config\"
-        apply_feature_service FEATURE_IMPORT_HUB     \"import-server\"
-        apply_feature_service FEATURE_PRINTER_WEBUI  \"cups printer-config cups-lpd.socket cups-lpd-ensure.service relay-print-watchdog.timer\"
-        echo \"   manifest applied:\"; grep -E \"^FEATURE_\" /etc/pacemaker/clinic.conf | sed \"s/^/     /\"'
-"
-
-echo ">> [1/2] web UI (tabs + node names + source column) via the NOPASSWD deploy hook"
-ssh "${SSH_OPTS[@]}" basti@"$PI" 'sudo -n /usr/local/sbin/deploy-printer-config \
-    && echo "   deployed; new-UI markers: tabs=$(grep -c "class=\"tabs\"" /usr/local/sbin/printer-config-server.py) names=$(grep -c set_node_name /usr/local/sbin/printer-config-server.py) source=$(grep -c _job_sources /usr/local/sbin/printer-config-server.py)"'
-
-echo ">> [2/2] autoconf + watchdog + export/import (needs sudo password)"
-ssh -t "${SSH_OPTS[@]}" basti@"$PI" '
-    sudo install -m 755 /tmp/cups-autoconf-printer.sh /usr/local/sbin/
-    sudo install -m 755 /tmp/relay-print-watchdog.sh  /usr/local/sbin/
-    sudo install -m 755 /tmp/usb-reset-printer.sh     /usr/local/sbin/
-    sudo install -m 644 /tmp/printer-config.service /tmp/ipp-usb-ensure.service /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer /tmp/hostapd-station-handler.service /etc/systemd/system/
-    sudo install -m 755 /tmp/hostapd-station-handler.sh /usr/local/sbin/
-
-    # State dir for custom node names.
-    sudo mkdir -p /var/lib/relay-ui
-
-    # Clear stale autoconf decision so the new protocol-aware script re-detects.
-    sudo rm -f /var/lib/printer-autoconf/decision
-
-    # Install ipp-usb (needed for protocol-4 printers like HP 3302).
-    sudo apt-get install -y ipp-usb 2>/dev/null || true
-    echo "blacklist usblp" | sudo tee /etc/modprobe.d/blacklist-usblp.conf >/dev/null
-    sudo rmmod usblp 2>/dev/null || true
-    sudo systemctl unmask ipp-usb ipp-usb.socket 2>/dev/null || true
-    sudo rm -f /usr/lib/cups/backend/usblp
-    [ -f /usr/lib/cups/backend/usb ] && sudo chmod 755 /usr/lib/cups/backend/usb 2>/dev/null || true
-
-    # Let autoconf detect the right transport (ipp-usb vs usblp) at boot.
-    sudo systemctl enable ipp-usb-ensure 2>/dev/null || true
-    sudo /usr/local/sbin/cups-autoconf-printer.sh &
-
-    # Remove overly aggressive ARP settings that expired entries in 5s
-    # (the watchdog was deauthing live stations whose entries went STALE).
-    # Default kernel ARP timings are fine; station cleanup is event-driven
-    # via hostapd-station-handler.service.
-    sudo rm -f /etc/sysctl.d/90-wlan0-arp.conf
-    sudo sysctl -w net.ipv4.neigh.wlan0.base_reachable_time_ms=30000 2>/dev/null || true
-    sudo sysctl -w net.ipv4.neigh.wlan0.gc_stale_time=60 2>/dev/null || true
-    # Remove stale aggressive-timeout settings that kick idle-but-alive stations.
-    sudo sed -i "/^ap_max_inactivity=5$/d" /etc/hostapd/hostapd.conf 2>/dev/null || true
+    sudo systemctl unmask hostapd
+    sudo systemctl enable hostapd dnsmasq chrony relay-ap-ip >/dev/null 2>&1 || true
+    sudo systemctl restart dnsmasq chrony 2>/dev/null || true
+    sudo systemctl start hostapd 2>/dev/null || true
+    echo "   AP configured: ssid=\$AP_SSID channel=\$AP_CHANNEL"
+else
+    echo ">> [AP] already configured, applying tweaks"
+    sudo sed -i "/^ap_max_inactivity=5\$/d" /etc/hostapd/hostapd.conf 2>/dev/null || true
     sudo sed -i "/^skip_inactivity_poll=/d" /etc/hostapd/hostapd.conf 2>/dev/null || true
-
-    # hostapd control interface (needed for hostapd_cli deauth in watchdog/flush).
     if ! sudo grep -q "^ctrl_interface=" /etc/hostapd/hostapd.conf 2>/dev/null; then
         printf "ctrl_interface=/var/run/hostapd\nctrl_interface_group=0\n" | sudo tee -a /etc/hostapd/hostapd.conf >/dev/null
-        echo "   added hostapd ctrl_interface"
     fi
-
-    # Country code + 802.11d for proper regulatory TX power.
     if ! sudo grep -q "^country_code=" /etc/hostapd/hostapd.conf 2>/dev/null; then
-        printf "country_code=DE\nieee80211d=1\n" | sudo tee -a /etc/hostapd/hostapd.conf >/dev/null
-        echo "   added country_code=DE"
+        printf "country_code=\$WIFI_COUNTRY\nieee80211d=1\n" | sudo tee -a /etc/hostapd/hostapd.conf >/dev/null
+    fi
+fi
+
+# ARP + power save
+sudo rm -f /etc/sysctl.d/90-wlan0-arp.conf
+sudo sysctl -w net.ipv4.neigh.wlan0.base_reachable_time_ms=30000 2>/dev/null || true
+sudo sysctl -w net.ipv4.neigh.wlan0.gc_stale_time=60 2>/dev/null || true
+sudo iw dev wlan0 set power_save off 2>/dev/null || true
+
+# ── CUPS + LPR ──────────────────────────────────────────────────────────────
+if which cups >/dev/null 2>&1; then
+    sudo sed -i 's/^Listen localhost:631\$/Listen 0.0.0.0:631/' /etc/cups/cupsd.conf 2>/dev/null || true
+    if ! grep -q "Allow from 10\.99\." /etc/cups/cupsd.conf 2>/dev/null; then
+        sudo sed -i '/<Location \/>/{n; /Order allow,deny/a\  Allow from 10.99.0.0/24\n  Allow from 192.168.179.0/24
+        }' /etc/cups/cupsd.conf 2>/dev/null || true
+    fi
+    sudo cupsctl --share-printers --remote-any 2>/dev/null || true
+
+    if [ ! -f /etc/systemd/system/cups-lpd.socket ]; then
+        sudo tee /etc/systemd/system/cups-lpd.socket >/dev/null << 'EOF'
+[Unit]
+Description=CUPS LPD Protocol Listener (relay LPR on 515)
+
+[Socket]
+ListenStream=515
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+EOF
+        sudo tee /etc/systemd/system/cups-lpd@.service >/dev/null << 'EOF'
+[Unit]
+Description=CUPS LPD per-connection server
+
+[Service]
+ExecStart=/usr/lib/cups/daemon/cups-lpd -o document-format=application/octet-stream
+StandardInput=socket
+StandardError=journal
+User=lp
+Group=lp
+EOF
     fi
 
-    # Disable WiFi power save on the AP — avoids delayed beacons that
-    # cause weak-signal stations to lose sync.
-    sudo iw dev wlan0 set power_save off 2>/dev/null || true
+    if [ ! -f /etc/systemd/system/cups-lpd-ensure.service ]; then
+        sudo tee /etc/systemd/system/cups-lpd-ensure.service >/dev/null << 'EOF'
+[Unit]
+Description=Ensure cups-lpd socket is enabled and active
+After=cups.service
+Requires=cups.service
 
-    # Auto-flush ARP on station connect/disconnect (eliminates manual flush).
-    sudo systemctl enable --now hostapd-station-handler 2>/dev/null || true
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'systemctl is-active cups-lpd.socket || systemctl enable --now cups-lpd.socket'
 
-    # dwc2 overlay in config.txt (requires reboot to take effect).
-    BOOT_CONFIG="/boot/firmware/config.txt"
-    if [ -f "$BOOT_CONFIG" ] && ! grep -q "dtoverlay=dwc2" "$BOOT_CONFIG"; then
-        sudo cp "$BOOT_CONFIG" "${BOOT_CONFIG}.pre-dwc2"
-        if grep -q "^\[all\]" "$BOOT_CONFIG"; then
-            sudo sed -i "/^\[all\]/a dtoverlay=dwc2,dr_mode=host" "$BOOT_CONFIG"
-        else
-            printf "\n[all]\ndtoverlay=dwc2,dr_mode=host\n" | sudo tee -a "$BOOT_CONFIG" >/dev/null
-        fi
-        echo "   *** dtoverlay=dwc2 added — REBOOT REQUIRED ***"
+[Install]
+WantedBy=multi-user.target
+EOF
     fi
-    # DS3231 RTC overlay (I2C).
-    if [ -f "$BOOT_CONFIG" ] && ! grep -q "dtoverlay=i2c-rtc,ds3231" "$BOOT_CONFIG"; then
-        sudo sed -i "/^\[all\]/a dtoverlay=i2c-rtc,ds3231" "$BOOT_CONFIG"
-        echo "   *** dtoverlay=i2c-rtc,ds3231 added — REBOOT REQUIRED ***"
-    fi
-
-    BOOT_CMDLINE="/boot/firmware/cmdline.txt"
-    if [ -f "$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "$BOOT_CMDLINE"; then
-        sudo sed -i "s/ *dwc_otg\.speed=[0-9]*//" "$BOOT_CMDLINE"
-        echo "   removed dwc_otg.speed from cmdline.txt"
-    fi
-
-    # Export server (if files were copied).
-    [ -f /tmp/export-config-server.py ] && {
-        sudo install -m 755 /tmp/export-config-server.py /usr/local/sbin/
-        sudo install -m 644 /tmp/export-config.service   /etc/systemd/system/
-    }
-
-    # Import hub (if files were copied).
-    [ -f /tmp/import-server.py ] && {
-        sudo install -m 755 /tmp/import-server.py      /usr/local/sbin/
-        sudo install -m 644 /tmp/import-server.service /etc/systemd/system/
-        sudo mkdir -p /var/lib/pacemaker-import-hub
-    }
-
-    # Samba import dir.
-    sudo mkdir -p /var/lib/pacemaker-export/import
-    sudo chmod 777 /var/lib/pacemaker-export/import
 
     sudo systemctl daemon-reload
-    sudo systemctl enable --now relay-print-watchdog.timer
+    sudo systemctl enable --now cups-lpd.socket cups-lpd-ensure.service 2>/dev/null || true
+fi
 
-    # Apply feature toggles for the new services.
-    sudo sh -c ". /usr/local/sbin/feature-lib.sh; . /etc/pacemaker/clinic.conf 2>/dev/null || true
-        apply_feature_service FEATURE_SAMBA_SHARE   \"smbd nmbd export-config\"
-        apply_feature_service FEATURE_IMPORT_HUB    \"import-server\"
-        apply_feature_service FEATURE_PRINTER_WEBUI \"cups printer-config cups-lpd.socket cups-lpd-ensure.service relay-print-watchdog.timer\""
+# ── ipp-usb + usblp blacklist ───────────────────────────────────────────────
+echo "blacklist usblp" | sudo tee /etc/modprobe.d/blacklist-usblp.conf >/dev/null
+sudo rmmod usblp 2>/dev/null || true
+sudo systemctl unmask ipp-usb ipp-usb.socket 2>/dev/null || true
+sudo rm -f /usr/lib/cups/backend/usblp
+[ -f /usr/lib/cups/backend/usb ] && sudo chmod 755 /usr/lib/cups/backend/usb 2>/dev/null || true
 
-    echo "   watchdog: $(systemctl is-active relay-print-watchdog.timer)"
-    echo "   ipp-usb + dwc2 driver (usblp blacklisted)"
-'
+# ── Install relay scripts + services ────────────────────────────────────────
+sudo install -m 755 /tmp/printer-config-server.py    /usr/local/sbin/
+sudo install -m 755 /tmp/cups-autoconf-printer.sh    /usr/local/sbin/
+sudo install -m 755 /tmp/relay-print-watchdog.sh     /usr/local/sbin/
+sudo install -m 755 /tmp/usb-reset-printer.sh        /usr/local/sbin/
+sudo install -m 755 /tmp/hostapd-station-handler.sh  /usr/local/sbin/
+sudo install -m 644 /tmp/printer-config.service /tmp/ipp-usb-ensure.service \
+    /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer \
+    /tmp/hostapd-station-handler.service /etc/systemd/system/
+sudo install -m 644 /tmp/99-usb-printer.rules /etc/udev/rules.d/ 2>/dev/null || true
+[ -f /tmp/deploy-printer-config ] && sudo install -m 755 /tmp/deploy-printer-config /usr/local/sbin/ 2>/dev/null || true
+sudo udevadm control --reload-rules 2>/dev/null || true
+
+sudo mkdir -p /var/lib/relay-ui
+sudo rm -f /var/lib/printer-autoconf/decision
+
+sudo systemctl enable ipp-usb-ensure 2>/dev/null || true
+sudo systemctl enable --now hostapd-station-handler 2>/dev/null || true
+
+# ── Export server ───────────────────────────────────────────────────────────
+[ -f /tmp/export-config-server.py ] && {
+    sudo install -m 755 /tmp/export-config-server.py /usr/local/sbin/
+    sudo install -m 644 /tmp/export-config.service   /etc/systemd/system/
+}
+
+# ── Import hub ──────────────────────────────────────────────────────────────
+[ -f /tmp/import-server.py ] && {
+    sudo install -m 755 /tmp/import-server.py      /usr/local/sbin/
+    sudo install -m 644 /tmp/import-server.service /etc/systemd/system/
+    sudo mkdir -p /var/lib/pacemaker-import-hub
+}
+
+# ── Samba share ─────────────────────────────────────────────────────────────
+sudo mkdir -p /var/lib/pacemaker-export/import
+sudo chmod 777 /var/lib/pacemaker-export/import
+if which smbd >/dev/null 2>&1 && ! grep -q '\[import\]' /etc/samba/smb.conf 2>/dev/null; then
+    sudo tee /etc/samba/smb.conf >/dev/null << 'EOF'
+[global]
+   workgroup = WORKGROUP
+   server string = Pacemaker Relay Hub
+   log level = 1
+   map to guest = bad user
+
+[import]
+   path = /var/lib/pacemaker-export/import
+   browseable = yes
+   read only = no
+   guest ok = yes
+   create mask = 0666
+   directory mask = 0777
+EOF
+    echo "   configured Samba [import] share"
+fi
+
+# ── Boot config (dwc2 + RTC) ───────────────────────────────────────────────
+BOOT_CONFIG="/boot/firmware/config.txt"
+NEEDS_REBOOT=0
+if [ -f "\$BOOT_CONFIG" ]; then
+    if ! grep -q "dtoverlay=dwc2" "\$BOOT_CONFIG"; then
+        sudo cp "\$BOOT_CONFIG" "\${BOOT_CONFIG}.pre-dwc2"
+        if grep -q '^\[all\]' "\$BOOT_CONFIG"; then
+            sudo sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=host' "\$BOOT_CONFIG"
+        else
+            printf '\n[all]\ndtoverlay=dwc2,dr_mode=host\n' | sudo tee -a "\$BOOT_CONFIG" >/dev/null
+        fi
+        NEEDS_REBOOT=1
+    fi
+    if ! grep -q "dtoverlay=i2c-rtc,ds3231" "\$BOOT_CONFIG"; then
+        if grep -q '^\[all\]' "\$BOOT_CONFIG"; then
+            sudo sed -i '/^\[all\]/a dtoverlay=i2c-rtc,ds3231' "\$BOOT_CONFIG"
+        fi
+        NEEDS_REBOOT=1
+    fi
+fi
+BOOT_CMDLINE="/boot/firmware/cmdline.txt"
+if [ -f "\$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "\$BOOT_CMDLINE"; then
+    sudo sed -i 's/ *dwc_otg\.speed=[0-9]*//' "\$BOOT_CMDLINE"
+fi
+
+# ── lpadmin group ───────────────────────────────────────────────────────────
+sudo usermod -aG lpadmin "\$(whoami)" 2>/dev/null || true
+
+# ── Daemon reload + enable + apply manifest ─────────────────────────────────
+sudo systemctl daemon-reload
+sudo systemctl enable --now relay-print-watchdog.timer 2>/dev/null || true
+
+sudo sh -c '. /usr/local/sbin/feature-lib.sh; . /etc/pacemaker/clinic.conf 2>/dev/null || true
+    apply_feature_service FEATURE_SAMBA_SHARE   "smbd nmbd export-config"
+    apply_feature_service FEATURE_IMPORT_HUB    "import-server"
+    apply_feature_service FEATURE_PRINTER_WEBUI "cups printer-config cups-lpd.socket cups-lpd-ensure.service relay-print-watchdog.timer"
+    echo "   manifest applied:"; grep -E "^FEATURE_" /etc/pacemaker/clinic.conf 2>/dev/null | sed "s/^/     /"'
+
+# ── Printer autoconf (background) ──────────────────────────────────────────
+sudo /usr/local/sbin/cups-autoconf-printer.sh &
+
+echo ""
+[ "\$NEEDS_REBOOT" = 1 ] && echo "   *** dtoverlay changes — REBOOT REQUIRED ***"
+echo "   hostapd:   \$(systemctl is-active hostapd 2>/dev/null || echo 'n/a')"
+echo "   dnsmasq:   \$(systemctl is-active dnsmasq 2>/dev/null || echo 'n/a')"
+echo "   cups:      \$(systemctl is-active cups 2>/dev/null || echo 'n/a')"
+echo "   smbd:      \$(systemctl is-active smbd 2>/dev/null || echo 'n/a')"
+echo "   export:    \$(systemctl is-active export-config 2>/dev/null || echo 'n/a')"
+echo "   import:    \$(systemctl is-active import-server 2>/dev/null || echo 'n/a')"
+echo "   watchdog:  \$(systemctl is-active relay-print-watchdog.timer)"
+ENDSCRIPT
+
+# ── Push and execute ─────────────────────────────────────────────────────────
+echo ">> deploying on Pi3 (needs sudo password on fresh system)"
+_scp "$REMOTE_SCRIPT"
+_ssht "bash /tmp/$(basename "$REMOTE_SCRIPT")"
 
 echo
-echo ">> done. Verify:"
-echo "   curl -s http://$PI/ | grep -oE 'class=\"tabs\"|set_node_name'   # web UI"
-echo "   ssh ${SSH_OPTS[*]} basti@$PI 'lpstat -v LaserPrinter'            # usblp:///dev/usb/lp0"
-echo "   ssh ${SSH_OPTS[*]} basti@$PI 'systemctl is-active smbd'          # samba"
+echo ">> done."
+echo "   Printer UI: http://$PI/"
+echo "   Export UI:  http://$PI:8080/"
+echo "   Samba:      \\\\$PI\\import"
