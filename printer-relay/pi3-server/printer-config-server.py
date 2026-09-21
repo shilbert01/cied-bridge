@@ -632,7 +632,7 @@ def _usb_diag() -> dict:
     try:
         out = subprocess.check_output(["lsusb"], text=True, timeout=5)
         printers = [l.strip() for l in out.splitlines()
-                    if any(kw in l.lower() for kw in ("printer", "hp", "laser", "canon", "epson", "brother"))]
+                    if any(kw in l.lower() for kw in ("printer", "hp", "laser", "canon", "epson", "brother", "kyocera", "utax"))]
         diag["usb_devices"] = printers or []
     except Exception:
         diag["usb_devices"] = []
