@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 IMPORT_DIR = Path("/var/lib/pacemaker-export/import")
-PORT       = 80
+PORT       = 8080
 
 
 def _file_rows() -> str:
