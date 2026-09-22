@@ -216,7 +216,7 @@ def _configure(uri: str) -> None:
 #   - `ip neigh` on wlan0 — authoritative "who is present"; crucially it catches
 #     STATIC-IP nodes like the Pi Zero (10.99.0.2), which never appear in DHCP.
 #   - dnsmasq leases  — hostname for DHCP clients.
-#   - hostapd_cli     — signal strength, IF the hostapd control interface is on.
+#   - hostapd_cli     — station management (deauth, flush).
 #   - a reachability ping.
 # Refreshed on a timer (off the request path), same as the CUPS/MEDIASOURCE caches.
 # This also generalises the old single hardcoded PI0_HOST into a live fleet view.
@@ -238,26 +238,6 @@ def _ping(ip: str) -> bool:
     except Exception:
         return False
 
-
-def _hostapd_signal() -> dict:
-    """mac -> signal (dBm). Empty if the hostapd control interface isn't enabled."""
-    sig: dict[str, int] = {}
-    try:
-        out = subprocess.check_output(["hostapd_cli", "-i", RELAY_IFACE, "all_sta"],
-                                      text=True, stderr=subprocess.DEVNULL, timeout=5)
-    except Exception:
-        return sig
-    mac = None
-    for line in out.splitlines():
-        line = line.strip()
-        if re.fullmatch(r"[0-9a-fA-F:]{17}", line):
-            mac = line.lower()
-        elif line.startswith("signal=") and mac:
-            try:
-                sig[mac] = int(line.split("=", 1)[1].split()[0])
-            except ValueError:
-                pass
-    return sig
 
 
 def _dhcp_leases() -> dict:
@@ -298,11 +278,9 @@ def _edge_refresh() -> None:
     for mac in _node_names():
         nodes.setdefault(mac, {"ip": "", "mac": mac})
 
-    sig    = _hostapd_signal()
     result = []
     for mac, n in nodes.items():
         n["host"]   = hosts.get(mac, "")
-        n["signal"] = sig.get(mac)
         n["is_pi"]  = any(mac.startswith(o) for o in PI_OUIS)
         n["online"] = _ping(n["ip"]) if n["ip"] else False
         result.append(n)
@@ -849,7 +827,7 @@ def _wifi_flush_arp() -> str:
     msgs.append("ARP cache flushed")
 
     try:
-        r = subprocess.run(["hostapd_cli", "all_sta"], capture_output=True,
+        r = subprocess.run(["/usr/sbin/hostapd_cli", "-p", "/var/run/hostapd", "all_sta"], capture_output=True,
                            text=True, timeout=CMD_TIMEOUT)
         neigh = subprocess.run(["ip", "neigh", "show", "dev", "wlan0"],
                                capture_output=True, text=True, timeout=CMD_TIMEOUT)
@@ -858,7 +836,7 @@ def _wifi_flush_arp() -> str:
         for line in r.stdout.splitlines():
             mac = line.strip()
             if len(mac) == 17 and mac.count(":") == 5 and mac not in neigh_out:
-                subprocess.run(["hostapd_cli", "deauthenticate", mac],
+                subprocess.run(["/usr/sbin/hostapd_cli", "-p", "/var/run/hostapd", "deauthenticate", mac],
                                capture_output=True, timeout=CMD_TIMEOUT)
                 deauthed += 1
         if deauthed:
@@ -1026,7 +1004,6 @@ def _page(message: str = "", error: bool = False) -> bytes:
         auto   = n["host"] or ("relay node" if n["is_pi"] else "client")
         custom = names.get(n["mac"], "")
         kind   = "Pi relay" if n["is_pi"] else "other"
-        sig    = f'{n["signal"]} dBm' if n["signal"] else "—"
         status = ('<span class="ok">online</span>' if n["online"]
                   else '<span class="error">unreachable</span>')
         fw_entry = fw_info.get(n["mac"], {})
@@ -1042,10 +1019,10 @@ def _page(message: str = "", error: bool = False) -> bytes:
         edge_rows += (
             f'<tr><td>{name_cell}</td><td class="uri">{n["ip"]}</td>'
             f'<td class="uri">{n["mac"]}</td><td>{kind}</td>'
-            f'<td>{fw_cell}</td><td>{sig}</td><td>{status}</td></tr>'
+            f'<td>{fw_cell}</td><td>{status}</td></tr>'
         )
     if not edge_rows:
-        edge_rows = '<tr><td colspan="7" class="empty">No edge nodes connected.</td></tr>'
+        edge_rows = '<tr><td colspan="6" class="empty">No edge nodes connected.</td></tr>'
 
     # USB-connected ESP32 devices (for flashing)
     esp_rows = ""
@@ -1141,7 +1118,7 @@ def _page(message: str = "", error: bool = False) -> bytes:
 
   <section id="tab-nodes" class="tab">
     <table>
-      <tr><th>Name</th><th>IP</th><th>MAC</th><th>Type</th><th>Firmware</th><th>Signal</th><th>Status</th></tr>
+      <tr><th>Name</th><th>IP</th><th>MAC</th><th>Type</th><th>Firmware</th><th>Status</th></tr>
       {edge_rows}
     </table>
     {'<h2>USB-connected ESP32 devices</h2>'
