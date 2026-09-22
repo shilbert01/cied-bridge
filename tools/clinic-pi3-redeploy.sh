@@ -78,6 +78,10 @@ _scp \
     "$IMPORT_SRC/import-server.py" \
     "$IMPORT_SRC/import-server.service" && echo "   + import hub"
 
+# ESP firmware binary (from the esp32-pendrive build, if present)
+ESP_FW="$(cd "$(dirname "$0")/../../esp32-pendrive-s3-wifi-dongle/build" 2>/dev/null && pwd)/usb_dongle.bin"
+[ -f "$ESP_FW" ] && _scp "$ESP_FW" && echo "   + ESP firmware binary"
+
 # ── Generate remote setup script with config values baked in ─────────────────
 REMOTE_SCRIPT=$(mktemp)
 trap 'rm -f "$REMOTE_SCRIPT"' EXIT
@@ -103,7 +107,7 @@ which cups >/dev/null 2>&1    || FRESH=1
 if [ "\$FRESH" = 1 ]; then
     echo ">> [fresh system] installing packages"
     sudo apt-get update -qq
-    sudo apt-get install -y hostapd dnsmasq cups cups-bsd chrony samba ipp-usb rfkill
+    sudo apt-get install -y hostapd dnsmasq cups cups-bsd chrony samba ipp-usb rfkill python3-pip
 fi
 
 # ── Feature manifest ────────────────────────────────────────────────────────
@@ -286,7 +290,12 @@ sudo install -m 644 /tmp/99-usb-printer.rules /etc/udev/rules.d/ 2>/dev/null || 
 sudo udevadm control --reload-rules 2>/dev/null || true
 
 sudo mkdir -p /var/lib/relay-ui
+sudo mkdir -p /usr/local/share/relay-firmware
+[ -f /tmp/usb_dongle.bin ] && sudo install -m 644 /tmp/usb_dongle.bin /usr/local/share/relay-firmware/
 sudo rm -f /var/lib/printer-autoconf/decision
+
+# esptool for USB firmware flashing from the web UI
+which esptool.py >/dev/null 2>&1 || sudo pip3 install esptool --break-system-packages 2>/dev/null || true
 
 sudo systemctl enable ipp-usb-ensure 2>/dev/null || true
 sudo systemctl enable --now hostapd-station-handler 2>/dev/null || true

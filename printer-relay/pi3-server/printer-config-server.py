@@ -503,7 +503,10 @@ def _reprint(spool: str) -> None:
 # can call a node "Cathlab-2" instead of reading relay-pizero-XXXXXX. Persisted on
 # the Pi3; no firmware/node change needed.
 NODE_NAMES_FILE = Path("/var/lib/relay-ui/node-names.json")
+NODE_FW_FILE    = Path("/var/lib/relay-ui/node-firmware.json")
+FIRMWARE_DIR    = Path("/usr/local/share/relay-firmware")
 _names_lock = threading.Lock()
+_fw_lock    = threading.Lock()
 
 
 def _node_names() -> dict:
@@ -530,6 +533,87 @@ def _set_node_name(mac: str, name: str) -> None:
             data.pop(mac, None)                     # blank clears the custom label
         NODE_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
         NODE_NAMES_FILE.write_text(json.dumps(data))
+
+
+def _node_firmware() -> dict:
+    with _fw_lock:
+        try:
+            return json.loads(NODE_FW_FILE.read_text())
+        except Exception:
+            return {}
+
+
+def _set_node_firmware(mac: str, node_id: str, firmware: str) -> None:
+    mac = (mac or "").strip().lower()
+    if not mac:
+        return
+    with _fw_lock:
+        try:
+            data = json.loads(NODE_FW_FILE.read_text())
+        except Exception:
+            data = {}
+        data[mac] = {
+            "node_id": node_id,
+            "firmware": firmware,
+            "last_seen": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        NODE_FW_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NODE_FW_FILE.write_text(json.dumps(data))
+
+
+def _usb_esp_devices() -> list[dict]:
+    """Detect ESP32-S3 boards connected via USB (shows as /dev/ttyACM*)."""
+    devices = []
+    try:
+        out = subprocess.check_output(["lsusb"], text=True, timeout=5)
+        for line in out.splitlines():
+            if "303a:" in line.lower():
+                m = re.search(r"Bus (\d+) Device (\d+): ID (\S+)\s+(.*)", line)
+                if m:
+                    devices.append({
+                        "bus": m.group(1), "dev": m.group(2),
+                        "id": m.group(3), "name": m.group(4).strip(),
+                    })
+    except Exception:
+        pass
+    import glob
+    ports = sorted(glob.glob("/dev/ttyACM*"))
+    for i, d in enumerate(devices):
+        d["port"] = ports[i] if i < len(ports) else ""
+    return devices
+
+
+def _latest_firmware_bin() -> Path | None:
+    """Return the newest .bin file in the firmware directory."""
+    if not FIRMWARE_DIR.is_dir():
+        return None
+    bins = sorted(FIRMWARE_DIR.glob("*.bin"), key=lambda f: f.stat().st_mtime, reverse=True)
+    return bins[0] if bins else None
+
+
+def _flash_esp(port: str) -> str:
+    """Flash the latest firmware binary to an ESP32-S3 on the given serial port."""
+    fw = _latest_firmware_bin()
+    if not fw:
+        return f"No firmware binary found in {FIRMWARE_DIR}"
+    if not Path(port).exists():
+        return f"Serial port {port} not found"
+    try:
+        r = subprocess.run(
+            ["esptool.py", "--chip", "esp32s3", "-p", port, "-b", "460800",
+             "--before=default_reset", "--after=hard_reset",
+             "write_flash", "--flash_mode", "dio", "--flash_freq", "80m",
+             "--flash_size", "16MB", "0x10000", str(fw)],
+            capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            return f"Flashed {fw.name} to {port} successfully."
+        return f"Flash failed: {r.stderr[-500:]}"
+    except subprocess.TimeoutExpired:
+        return "Flash timed out after 120 seconds."
+    except FileNotFoundError:
+        return "esptool.py not found — install with: pip3 install esptool"
+    except Exception as exc:
+        return f"Flash error: {exc}"
 
 
 def _job_sources() -> dict:
@@ -852,6 +936,9 @@ def _page(message: str = "", error: bool = False) -> bytes:
     # mediasrc None = never successfully read; ms_fresh False = last refresh failed
     # (value shown is the last known one).
     mediasrc, ms_fresh = _mediasource_cached()
+    fw_info      = _node_firmware()
+    usb_esps     = _usb_esp_devices()
+    latest_fw    = _latest_firmware_bin()
     export_files = _export_files()
     samba_st     = _samba_status()
     diag         = _usb_diag()
@@ -939,10 +1026,12 @@ def _page(message: str = "", error: bool = False) -> bytes:
         auto   = n["host"] or ("relay node" if n["is_pi"] else "client")
         custom = names.get(n["mac"], "")
         kind   = "Pi relay" if n["is_pi"] else "other"
-        # brcmfmac AP mode reports signal=0 (unknown); show it as "—", not "0 dBm".
         sig    = f'{n["signal"]} dBm' if n["signal"] else "—"
         status = ('<span class="ok">online</span>' if n["online"]
                   else '<span class="error">unreachable</span>')
+        fw_entry = fw_info.get(n["mac"], {})
+        fw_ver   = fw_entry.get("firmware", "")
+        fw_cell  = f'<span class="uri">{fw_ver}</span>' if fw_ver else '<span class="empty">—</span>'
         name_cell = (
             f'<form method="post" action="/set_node_name" class="rename">'
             f'<input type="hidden" name="mac" value="{n["mac"]}">'
@@ -953,10 +1042,25 @@ def _page(message: str = "", error: bool = False) -> bytes:
         edge_rows += (
             f'<tr><td>{name_cell}</td><td class="uri">{n["ip"]}</td>'
             f'<td class="uri">{n["mac"]}</td><td>{kind}</td>'
-            f'<td>{sig}</td><td>{status}</td></tr>'
+            f'<td>{fw_cell}</td><td>{sig}</td><td>{status}</td></tr>'
         )
     if not edge_rows:
-        edge_rows = '<tr><td colspan="6" class="empty">No edge nodes connected.</td></tr>'
+        edge_rows = '<tr><td colspan="7" class="empty">No edge nodes connected.</td></tr>'
+
+    # USB-connected ESP32 devices (for flashing)
+    esp_rows = ""
+    for esp in usb_esps:
+        port = esp["port"]
+        if port:
+            esp_rows += (
+                f'<tr><td>{esp["name"]}</td><td class="uri">{port}</td>'
+                f'<td class="uri">{esp["id"]}</td>'
+                f'<td><form method="post" action="/flash_esp" style="display:inline"'
+                f' onsubmit="return confirm(\'Flash firmware to {port}?\')">'
+                f'<input type="hidden" name="port" value="{port}">'
+                f'<button type="submit">Flash</button></form></td></tr>'
+            )
+    fw_name = latest_fw.name if latest_fw else "none"
 
     # ── export file rows
     export_rows = ""
@@ -1037,9 +1141,15 @@ def _page(message: str = "", error: bool = False) -> bytes:
 
   <section id="tab-nodes" class="tab">
     <table>
-      <tr><th>Name</th><th>IP</th><th>MAC</th><th>Type</th><th>Signal</th><th>Status</th></tr>
+      <tr><th>Name</th><th>IP</th><th>MAC</th><th>Type</th><th>Firmware</th><th>Signal</th><th>Status</th></tr>
       {edge_rows}
     </table>
+    {'<h2>USB-connected ESP32 devices</h2>'
+     '<p style="font-size:0.85em;color:#888">Firmware: <code>' + fw_name + '</code></p>'
+     '<table><tr><th>Device</th><th>Port</th><th>ID</th><th>Action</th></tr>'
+     + esp_rows + '</table>' if esp_rows else
+     '<p style="font-size:0.85em;color:#888;margin-top:1em">'
+     'No ESP32 connected via USB. Plug one in to flash firmware.</p>'}
   </section>
 
   <section id="tab-diag" class="tab">
@@ -1133,6 +1243,18 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(_page())
 
     def do_POST(self):
+        # /node-announce is JSON, not form-encoded.
+        if self.path == "/node-announce":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length).decode())
+                _set_node_firmware(body.get("mac", ""), body.get("node_id", ""),
+                                   body.get("firmware", ""))
+                self._send(b"ok", 200)
+            except Exception as exc:
+                self._send(str(exc).encode(), 400)
+            return
+
         # /ingest-export is raw binary, not form-encoded — handle before _params().
         if self.path == "/ingest-export":
             try:
@@ -1230,6 +1352,14 @@ class _Handler(BaseHTTPRequestHandler):
             elif self.path == "/diag_flush_arp":
                 msg = _wifi_flush_arp()
                 self._send(_page(msg))
+
+            elif self.path == "/flash_esp":
+                port = p.get("port", [""])[0]
+                if not port:
+                    raise ValueError("No serial port specified")
+                msg = _flash_esp(port)
+                is_err = "failed" in msg.lower() or "error" in msg.lower() or "not found" in msg.lower()
+                self._send(_page(msg, error=is_err))
 
             else:
                 self._send(b"Not found", 404)
