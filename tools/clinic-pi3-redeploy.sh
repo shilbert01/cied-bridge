@@ -340,7 +340,9 @@ fi
 BOOT_CONFIG="/boot/firmware/config.txt"
 NEEDS_REBOOT=0
 if [ -f "\$BOOT_CONFIG" ]; then
-    if ! grep -q "dtoverlay=dwc2" "\$BOOT_CONFIG"; then
+    # Check for dwc2 specifically in [all] section — stock Pi OS has it under [cm5]
+    # which doesn't apply to Pi3.
+    if ! sudo sed -n '/^\[all\]/,/^\[/p' "\$BOOT_CONFIG" 2>/dev/null | grep -q "dtoverlay=dwc2"; then
         sudo cp "\$BOOT_CONFIG" "\${BOOT_CONFIG}.pre-dwc2"
         if grep -q '^\[all\]' "\$BOOT_CONFIG"; then
             sudo sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=host' "\$BOOT_CONFIG"
