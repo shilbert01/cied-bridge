@@ -299,6 +299,7 @@ which esptool.py >/dev/null 2>&1 || sudo pip3 install esptool --break-system-pac
 
 sudo systemctl enable ipp-usb-ensure 2>/dev/null || true
 sudo systemctl enable --now hostapd-station-handler 2>/dev/null || true
+sudo systemctl enable printer-config 2>/dev/null || true
 
 # ── Export server ───────────────────────────────────────────────────────────
 [ -f /tmp/export-config-server.py ] && {
