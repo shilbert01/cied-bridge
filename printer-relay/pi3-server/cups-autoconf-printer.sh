@@ -59,6 +59,12 @@ setup_usblp() {
         systemctl stop ipp-usb 2>/dev/null
         sleep 2
     fi
+    # usblp is blacklisted by default (ipp-usb printers need it gone); load it
+    # for printers that require it.
+    if ! lsmod | grep -q usblp; then
+        modprobe usblp 2>/dev/null || true
+        sleep 1
+    fi
     local uri
     uri=$(find_usb_uri)
     if [ -z "$uri" ]; then
