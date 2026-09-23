@@ -738,18 +738,23 @@ def _usb_diag() -> dict:
     except Exception:
         diag["cups_errors"] = []
 
+    # Current queue transport: usblp:// means a non-ipp printer — ipp-usb is N/A.
+    cur_uri = _current_uri() or ""
+    diag["uses_usblp"] = cur_uri.startswith("usblp:")
+
     # Overall health assessment
     problems = []
     if not diag["usb_devices"]:
         problems.append(("No USB printer detected",
                          "Check the USB cable and make sure the printer is powered on."))
-    if not diag["ipp_usb_active"]:
-        problems.append(("ipp-usb service not running",
-                         "Use 'Reset printer connection' below to restart it."))
-    elif not diag["ipp_usb_reachable"]:
-        problems.append(("ipp-usb not reachable on port 60000",
-                         "The service is running but not accepting connections. "
-                         "Try 'Reset printer connection' below."))
+    if not diag["uses_usblp"]:
+        if not diag["ipp_usb_active"]:
+            problems.append(("ipp-usb service not running",
+                             "Use 'Reset printer connection' below to restart it."))
+        elif not diag["ipp_usb_reachable"]:
+            problems.append(("ipp-usb not reachable on port 60000",
+                             "The service is running but not accepting connections. "
+                             "Try 'Reset printer connection' below."))
     if diag["usb_driver"] == "dwc_otg":
         problems.append(("Old USB driver (dwc_otg)",
                          "This driver has known bugs with consecutive prints. "
@@ -762,8 +767,12 @@ def _usb_diag() -> dict:
                          "Jobs may be backed up. If nothing is printing, "
                          "cancel all and power cycle the printer."))
     diag["problems"] = problems
-    diag["healthy"] = (len(problems) == 0 and bool(diag["usb_devices"])
-                       and diag["ipp_usb_reachable"])
+    if diag["uses_usblp"]:
+        diag["healthy"] = (len(problems) == 0 and bool(diag["usb_devices"])
+                           and diag["queue_enabled"])
+    else:
+        diag["healthy"] = (len(problems) == 0 and bool(diag["usb_devices"])
+                           and diag["ipp_usb_reachable"])
 
     return diag
 
@@ -1144,7 +1153,7 @@ def _page(message: str = "", error: bool = False) -> bytes:
     <table>
       <tr><td>USB driver</td><td>{'<span class="ok">dwc2</span>' if diag.get('usb_driver') == 'dwc2' else '<span class="error">' + str(diag.get('usb_driver', '?')) + '</span>'}</td></tr>
       <tr><td>Printer</td><td>{diag['usb_devices'][0] if diag.get('usb_devices') else '<span class="error">not detected</span>'}</td></tr>
-      <tr><td>ipp-usb</td><td>{'<span class="ok">active (port 60000)</span>' if diag.get('ipp_usb_reachable') else ('<span class="error">not reachable</span>' if diag.get('ipp_usb_active') else '<span class="error">not running</span>')}</td></tr>
+      <tr><td>Transport</td><td>{'<span class="ok">usblp (raw)</span>' if diag.get('uses_usblp') else ('<span class="ok">ipp-usb (port 60000)</span>' if diag.get('ipp_usb_reachable') else ('<span class="error">ipp-usb not reachable</span>' if diag.get('ipp_usb_active') else '<span class="error">ipp-usb not running</span>'))}</td></tr>
       <tr><td>Print queue</td><td>{'<span class="ok">enabled</span>' if diag.get('queue_enabled') else '<span class="error">disabled</span>'}
         {', idle' if diag.get('queue_idle') else ''}</td></tr>
       <tr><td>Pending jobs</td><td>{diag.get('pending_jobs', 0)}</td></tr>
