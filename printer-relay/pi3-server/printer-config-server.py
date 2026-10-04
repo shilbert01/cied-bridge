@@ -5,8 +5,10 @@ Serves http://10.99.0.1/ on the relayap WiFi.
 """
 
 import json
+import mimetypes
 import os
 import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -14,10 +16,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
+from urllib.request import Request, urlopen
 
 QUEUE     = "LaserPrinter"
 PORT      = 80
 CUPS_CONF = "/etc/cups/cupsd.conf"
+VERSION_FILE = Path("/etc/pacemaker/version")
 
 # Every CUPS call gets a timeout. Without one, a wedged cupsd or a stuck backend
 # (e.g. a job spooled against a disconnected usb:// printer) blocks the request
@@ -34,9 +38,32 @@ MEDIASOURCE_TTL   = 60    # seconds between background refreshes of the cached v
 DEVICE_TTL        = 20    # seconds between CUPS device/queue re-probes
 EDGE_TTL          = 15    # seconds between edge-node (relay) status refreshes
 
-RELAY_IFACE = "wlan0"     # the AP interface the edge nodes associate to
+def _detect_ap_iface() -> str:
+    try:
+        for line in Path("/etc/hostapd/hostapd.conf").read_text().splitlines():
+            if line.startswith("interface="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return "wlan0"
+
+RELAY_IFACE = _detect_ap_iface()
 # Raspberry Pi MAC OUIs — used to flag which associated stations are relay nodes.
 PI_OUIS = ("b8:27:eb", "dc:a6:32", "d8:3a:dd", "e4:5f:01", "28:cd:c1", "2c:cf:67")
+
+
+# ── Version ──────────────────────────────────────────────────────────────────
+
+def _read_version() -> dict:
+    info = {"version": "unknown", "commit": "unknown", "deployed": "unknown"}
+    try:
+        for line in VERSION_FILE.read_text().splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                info[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return info
 
 
 # ── CUPS helpers ──────────────────────────────────────────────────────────────
@@ -277,6 +304,8 @@ def _edge_refresh() -> None:
         nodes.setdefault(mac, {"ip": ip, "mac": mac})
     for mac in _node_names():
         nodes.setdefault(mac, {"ip": "", "mac": mac})
+    for mac in _node_firmware():
+        nodes.setdefault(mac, {"ip": "", "mac": mac})
 
     result = []
     for mac, n in nodes.items():
@@ -483,8 +512,13 @@ def _reprint(spool: str) -> None:
 NODE_NAMES_FILE = Path("/var/lib/relay-ui/node-names.json")
 NODE_FW_FILE    = Path("/var/lib/relay-ui/node-firmware.json")
 FIRMWARE_DIR    = Path("/usr/local/share/relay-firmware")
+JOB_ARCHIVE_DIR = Path("/var/lib/relay-ui/job-archive")
+ARCHIVE_RETENTION_DAYS = 30
+ARCHIVE_MAX_JOBS = 200
+ARCHIVE_SCAN_INTERVAL = 15
 _names_lock = threading.Lock()
 _fw_lock    = threading.Lock()
+_archive_lock = threading.Lock()
 
 
 def _node_names() -> dict:
@@ -540,12 +574,17 @@ def _set_node_firmware(mac: str, node_id: str, firmware: str) -> None:
 
 
 def _usb_esp_devices() -> list[dict]:
-    """Detect ESP32-S3 boards connected via USB (shows as /dev/ttyACM*)."""
+    """Detect ESP32-S3 boards connected via USB (shows as /dev/ttyACM*).
+
+    The UART port uses a QinHeng CH340 (1a86:55d3), not an Espressif VID,
+    so we match both.
+    """
+    ESP_VIDS = {"303a:", "1a86:"}
     devices = []
     try:
         out = subprocess.check_output(["lsusb"], text=True, timeout=5)
         for line in out.splitlines():
-            if "303a:" in line.lower():
+            if any(vid in line.lower() for vid in ESP_VIDS):
                 m = re.search(r"Bus (\d+) Device (\d+): ID (\S+)\s+(.*)", line)
                 if m:
                     devices.append({
@@ -567,6 +606,23 @@ def _latest_firmware_bin() -> Path | None:
         return None
     bins = sorted(FIRMWARE_DIR.glob("*.bin"), key=lambda f: f.stat().st_mtime, reverse=True)
     return bins[0] if bins else None
+
+
+def _firmware_bin_version(fw: Path | None) -> str:
+    """Extract the semver string baked into the firmware binary.
+
+    The version is a null-terminated C string from FIRMWARE_VERSION.
+    Match only short segments (0-99) to avoid IP addresses like 10.99.0.1.
+    """
+    if not fw:
+        return ""
+    try:
+        raw = fw.read_bytes()
+        for m in re.finditer(rb"\x00(\d{1,2}\.\d{1,2}\.\d{1,2})\x00", raw):
+            return m.group(1).decode("ascii")
+        return ""
+    except OSError:
+        return ""
 
 
 def _flash_esp(port: str) -> str:
@@ -592,6 +648,107 @@ def _flash_esp(port: str) -> str:
         return "esptool.py not found — install with: pip3 install esptool"
     except Exception as exc:
         return f"Flash error: {exc}"
+
+
+def _ensure_preserve_jobs() -> None:
+    """Enable PreserveJobFiles so the archiver can capture completed job data."""
+    if not _preserve_enabled():
+        _set_preserve(True)
+
+
+def _archive_convert(pcl_path: Path, pdf_path: Path) -> bool:
+    for cmd in ("gpcl6", "pcl6", "gs"):
+        try:
+            r = subprocess.run(
+                [cmd, "-sDEVICE=pdfwrite", "-dNOPAUSE", "-dBATCH", "-dQUIET",
+                 "-dSAFER", f"-sOutputFile={pdf_path}", str(pcl_path)],
+                capture_output=True, timeout=120)
+            if r.returncode == 0 and pdf_path.exists() and pdf_path.stat().st_size > 0:
+                return True
+            pdf_path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            continue
+        except Exception:
+            pdf_path.unlink(missing_ok=True)
+    return False
+
+
+def _archived_jobs() -> list[dict]:
+    if not JOB_ARCHIVE_DIR.is_dir():
+        return []
+    # List by PCL (always present), join with PDF if it exists.
+    pcls = sorted(JOB_ARCHIVE_DIR.glob("*.pcl"),
+                  key=lambda f: f.stat().st_mtime, reverse=True)
+    result = []
+    for pcl in pcls:
+        pdf = pcl.with_suffix(".pdf")
+        st = pcl.stat()
+        result.append({
+            "num": pcl.stem,
+            "has_pdf": pdf.exists(),
+            "pdf": pdf.name,
+            "has_pcl": True,
+            "size_kb": pdf.stat().st_size // 1024 if pdf.exists() else 0,
+            "pcl_kb": st.st_size // 1024,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)),
+        })
+    return result
+
+
+def _archive_scan() -> None:
+    with _archive_lock:
+        JOB_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        existing = {f.stem for f in JOB_ARCHIVE_DIR.glob("*.pdf")}
+        existing |= {f.stem for f in JOB_ARCHIVE_DIR.glob("*.pcl")}
+
+        jobs = _all_jobs()
+        for job in jobs:
+            if job["active"] or not job["has_file"]:
+                continue
+            num = job["num"].zfill(5)
+            if num in existing:
+                continue
+
+            pcl_path = JOB_ARCHIVE_DIR / f"{num}.pcl"
+            pdf_path = JOB_ARCHIVE_DIR / f"{num}.pdf"
+            try:
+                shutil.copy2(job["spool"], pcl_path)
+            except Exception:
+                continue
+
+            _archive_convert(pcl_path, pdf_path)
+            _cancel(job["id"], purge=True)
+
+
+def _archive_retention() -> None:
+    if not JOB_ARCHIVE_DIR.is_dir():
+        return
+    cutoff = time.time() - ARCHIVE_RETENTION_DAYS * 86400
+    for f in list(JOB_ARCHIVE_DIR.iterdir()):
+        if f.is_file() and f.stat().st_mtime < cutoff:
+            f.unlink(missing_ok=True)
+    pdfs = sorted(JOB_ARCHIVE_DIR.glob("*.pdf"), key=lambda f: f.stat().st_mtime)
+    while len(pdfs) > ARCHIVE_MAX_JOBS:
+        oldest = pdfs.pop(0)
+        oldest.unlink(missing_ok=True)
+        oldest.with_suffix(".pcl").unlink(missing_ok=True)
+
+
+def _archive_delete(num: str) -> None:
+    with _archive_lock:
+        for ext in (".pdf", ".pcl"):
+            (JOB_ARCHIVE_DIR / f"{num}{ext}").unlink(missing_ok=True)
+
+
+def _archive_refresher() -> None:
+    time.sleep(10)
+    while True:
+        try:
+            _archive_scan()
+            _archive_retention()
+        except Exception:
+            pass
+        time.sleep(ARCHIVE_SCAN_INTERVAL)
 
 
 def _job_sources() -> dict:
@@ -624,6 +781,7 @@ def _job_sources() -> dict:
 # ── Export share (Samba import directory) ─────────────────────────────────────
 
 IMPORT_DIR = Path("/var/lib/pacemaker-export/import")
+IMPORT_HUB_URL = "http://localhost:8090"
 
 
 def _export_files() -> list[dict]:
@@ -655,6 +813,17 @@ def _clear_export_files() -> int:
     except Exception:
         pass
     return deleted
+
+
+def _submit_to_hub(filename: str, data: bytes) -> None:
+    """Forward an ingested file to the import hub so CDC receivers can claim it."""
+    try:
+        req = Request(f"{IMPORT_HUB_URL}/submit", data=data, method="POST",
+                      headers={"X-File-Name": filename,
+                               "Content-Type": "application/octet-stream"})
+        urlopen(req, timeout=10)
+    except Exception:
+        pass
 
 
 # ── USB printer diagnostics ──────────────────────────────────────────────────
@@ -876,6 +1045,9 @@ button[disabled] { opacity: 0.45; cursor: default; }
 button.danger { color: #c33; }
 .ok   { color: #2a7; font-weight: bold; }
 .error { color: #c33; font-weight: bold; }
+.banner { padding: 0.7em 1em; border-radius: 6px; margin-bottom: 1em; }
+.banner.ok { background: #d4edda; color: #155724; }
+.banner.error { background: #f8d7da; color: #721c24; }
 .hint { font-size: 0.78em; color: #888; margin-top: 1.2em; }
 .toggle { display: flex; align-items: center; gap: 0.6em; margin: 0.4em 0; }
 .badge-active { background:#d4edda; color:#155724; padding:0.1em 0.5em;
@@ -926,9 +1098,12 @@ def _page(message: str = "", error: bool = False) -> bytes:
     fw_info      = _node_firmware()
     usb_esps     = _usb_esp_devices()
     latest_fw    = _latest_firmware_bin()
+    avail_fw_ver = _firmware_bin_version(latest_fw)
     export_files = _export_files()
     samba_st     = _samba_status()
     diag         = _usb_diag()
+    archived     = _archived_jobs()
+    ver          = _read_version()
 
     # ── scanned printer rows
     with _probe_lock:
@@ -1010,14 +1185,20 @@ def _page(message: str = "", error: bool = False) -> bytes:
     # ── edge node rows (with an inline custom-name field, keyed by MAC)
     edge_rows = ""
     for n in nodes:
-        auto   = n["host"] or ("relay node" if n["is_pi"] else "client")
+        fw_node_id = fw_info.get(n["mac"], {}).get("node_id", "")
+        auto   = n["host"] or fw_node_id or ("relay node" if n["is_pi"] else "client")
         custom = names.get(n["mac"], "")
-        kind   = "Pi relay" if n["is_pi"] else "other"
+        kind   = "Pi relay" if n["is_pi"] else ("ESP relay" if fw_node_id else "other")
         status = ('<span class="ok">online</span>' if n["online"]
                   else '<span class="error">unreachable</span>')
         fw_entry = fw_info.get(n["mac"], {})
         fw_ver   = fw_entry.get("firmware", "")
-        fw_cell  = f'<span class="uri">{fw_ver}</span>' if fw_ver else '<span class="empty">—</span>'
+        if fw_ver and avail_fw_ver and fw_ver != avail_fw_ver:
+            fw_cell = f'<span class="uri">{fw_ver}</span> <span class="error" title="available: {avail_fw_ver}">↑{avail_fw_ver}</span>'
+        elif fw_ver:
+            fw_cell = f'<span class="uri">{fw_ver}</span>'
+        else:
+            fw_cell = '<span class="empty">—</span>'
         name_cell = (
             f'<form method="post" action="/set_node_name" class="rename">'
             f'<input type="hidden" name="mac" value="{n["mac"]}">'
@@ -1038,33 +1219,40 @@ def _page(message: str = "", error: bool = False) -> bytes:
     for esp in usb_esps:
         port = esp["port"]
         if port:
+            fw_avail_cell = f'<span class="uri">{avail_fw_ver}</span>' if avail_fw_ver else '<span class="empty">—</span>'
             esp_rows += (
                 f'<tr><td>{esp["name"]}</td><td class="uri">{port}</td>'
                 f'<td class="uri">{esp["id"]}</td>'
+                f'<td>{fw_avail_cell}</td>'
                 f'<td><form method="post" action="/flash_esp" style="display:inline"'
                 f' onsubmit="return confirm(\'Flash firmware to {port}?\')">'
                 f'<input type="hidden" name="port" value="{port}">'
                 f'<button type="submit">Flash</button></form></td></tr>'
             )
     fw_name = latest_fw.name if latest_fw else "none"
+    fw_label = f"{fw_name} (v{avail_fw_ver})" if avail_fw_ver else fw_name
 
     # ── export file rows
     export_rows = ""
     for ef in export_files:
         sz = f"{ef['size']:,}" if ef["size"] < 1024 * 1024 else f"{ef['size'] / 1024 / 1024:.1f} MB"
-        export_rows += f'<tr><td>{ef["name"]}</td><td>{sz}</td><td>{ef["mtime"]}</td></tr>'
+        export_rows += (f'<tr><td>{ef["name"]}</td><td>{sz}</td><td>{ef["mtime"]}</td>'
+                        f'<td><a href="/export/{ef["name"]}" target="_blank">View</a> '
+                        f'<a href="/export/{ef["name"]}?dl=1">Download</a> '
+                        f'<a href="#" onclick="sendToHub(\'{ef["name"]}\');return false">Send</a>'
+                        f'</td></tr>')
     if not export_rows:
-        export_rows = '<tr><td colspan="3" class="empty">No files in share.</td></tr>'
+        export_rows = '<tr><td colspan="4" class="empty">No files in share.</td></tr>'
     samba_badge = "ok" if samba_st == "active" else "error"
 
-    msg = f'<p class="{"error" if error else "ok"}">{message}</p>' if message else ""
+    msg = f'<p class="banner {"error" if error else "ok"}">{message}</p>' if message else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="10">
+  {'<!-- auto-refresh suppressed: showing result message -->' if message else '<meta http-equiv="refresh" content="10">'}
   <title>Relay Hub</title>
   <style>{CSS}</style>
 </head>
@@ -1074,6 +1262,7 @@ def _page(message: str = "", error: bool = False) -> bytes:
 
   <div class="tabs">
     <button type="button" data-tab="jobs">Jobs</button>
+    <button type="button" data-tab="archive">Archive</button>
     <button type="button" data-tab="printers">Printers</button>
     <button type="button" data-tab="export">Export</button>
     <button type="button" data-tab="nodes">Nodes</button>
@@ -1085,6 +1274,32 @@ def _page(message: str = "", error: bool = False) -> bytes:
     <table>
       <tr><th>#</th><th>Status</th><th>Source</th><th>Size</th><th>Time</th><th>Actions</th></tr>
       {job_rows}
+    </table>
+  </section>
+
+  <section id="tab-archive" class="tab">
+    <p style="font-size:0.85em;color:#888">
+      Completed print jobs archived as PDF.
+      Retention: {ARCHIVE_RETENTION_DAYS} days / {ARCHIVE_MAX_JOBS} jobs.
+    </p>
+    <table>
+      <tr><th>#</th><th>Date</th><th>PDF</th><th>PCL</th><th>Actions</th></tr>
+      {''.join(
+          '<tr>'
+          '<td>' + a["num"].lstrip("0") + '</td>'
+          '<td style="font-size:0.85em">' + a["time"] + '</td>'
+          '<td>' + (str(a["size_kb"]) + ' KB' if a["has_pdf"] else '<span class="empty">failed</span>') + '</td>'
+          '<td>' + str(a["pcl_kb"]) + ' KB</td>'
+          '<td>'
+          + ('<a href="/archive/' + a["pdf"] + '" target="_blank">View</a> '
+             '<a href="/archive/' + a["pdf"] + '?dl=1">Download</a> ' if a["has_pdf"] else '')
+          + '<form method="post" action="/archive_delete" style="display:inline"'
+          ' onsubmit="return confirm(\'Delete archive #' + a["num"] + '?\')">'
+          '<input type="hidden" name="num" value="' + a["num"] + '">'
+          '<button type="submit" class="danger" style="padding:0.15em 0.4em;font-size:0.85em">Delete</button>'
+          '</form></td></tr>'
+          for a in archived
+      ) or '<tr><td colspan="5" class="empty">No archived jobs yet. Completed print jobs will appear here as PDFs.</td></tr>'}
     </table>
   </section>
 
@@ -1120,7 +1335,7 @@ def _page(message: str = "", error: bool = False) -> bytes:
       <button type="submit" class="danger">Clear all files</button>
     </form>
     <table style="margin-top:0.6em">
-      <tr><th>Filename</th><th>Size</th><th>Received</th></tr>
+      <tr><th>Filename</th><th>Size</th><th>Received</th><th>Actions</th></tr>
       {export_rows}
     </table>
   </section>
@@ -1130,11 +1345,19 @@ def _page(message: str = "", error: bool = False) -> bytes:
       <tr><th>Name</th><th>IP</th><th>MAC</th><th>Type</th><th>Firmware</th><th>Status</th></tr>
       {edge_rows}
     </table>
-    {'<h2>USB-connected ESP32 devices</h2>'
-     '<p style="font-size:0.85em;color:#888">Firmware: <code>' + fw_name + '</code></p>'
-     '<table><tr><th>Device</th><th>Port</th><th>ID</th><th>Action</th></tr>'
+    <h2>ESP32 Firmware</h2>
+    <p style="font-size:0.85em;color:#888">Current: <code>{fw_label}</code>
+      &nbsp;
+      <form method="post" action="/upload_firmware" enctype="multipart/form-data"
+            style="display:inline">
+        <input type="file" name="firmware" accept=".bin" required style="font-size:0.8em">
+        <button type="submit" style="font-size:0.8em">Upload .bin</button>
+      </form>
+    </p>
+    {'<h3 style="font-size:0.95em;margin-top:0.8em">USB-connected devices</h3>'
+     '<table><tr><th>Device</th><th>Port</th><th>ID</th><th>Firmware</th><th>Action</th></tr>'
      + esp_rows + '</table>' if esp_rows else
-     '<p style="font-size:0.85em;color:#888;margin-top:1em">'
+     '<p style="font-size:0.85em;color:#888">'
      'No ESP32 connected via USB. Plug one in to flash firmware.</p>'}
   </section>
 
@@ -1202,7 +1425,17 @@ def _page(message: str = "", error: bool = False) -> bytes:
     try {{ saved = localStorage.getItem('relayTab') || 'jobs'; }} catch (e) {{}}
     show(document.getElementById('tab-' + saved) ? saved : 'jobs');
   }})();
+  function sendToHub(name) {{
+    var f = document.createElement('form');
+    f.method = 'POST'; f.action = '/send_to_hub';
+    var i = document.createElement('input');
+    i.type = 'hidden'; i.name = 'file'; i.value = name;
+    f.appendChild(i); document.body.appendChild(f); f.submit();
+  }}
   </script>
+<footer style="margin-top:2em;padding:0.8em 0;border-top:1px solid #ddd;color:#999;font-size:0.8em;text-align:center">
+  Relay Hub v{ver["version"]} ({ver["commit"]})
+</footer>
 </body>
 </html>"""
     return html.encode()
@@ -1226,7 +1459,55 @@ class _Handler(BaseHTTPRequestHandler):
         return parse_qs(self.rfile.read(length).decode())
 
     def do_GET(self):
+        if self.path == "/api/version":
+            info = _read_version()
+            info["hostname"] = socket.gethostname()
+            self._send(json.dumps(info).encode(), content_type="application/json")
+            return
+        if self.path.startswith("/archive/"):
+            self._serve_archive()
+            return
+        if self.path.startswith("/export/"):
+            self._serve_export()
+            return
         self._send(_page())
+
+    def _serve_archive(self):
+        name = self.path.split("/archive/", 1)[1].split("?")[0]
+        if not re.match(r"^\d{5}\.(pdf|pcl)$", name):
+            self._send(b"Not found", 404)
+            return
+        fpath = JOB_ARCHIVE_DIR / name
+        if not fpath.is_file():
+            self._send(b"Not found", 404)
+            return
+        ct = "application/pdf" if name.endswith(".pdf") else "application/octet-stream"
+        dl = "?dl=1" in self.path
+        data = fpath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        if dl:
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_export(self):
+        name = self.path.split("/export/", 1)[1].split("?")[0]
+        fpath = IMPORT_DIR / name
+        if not fpath.is_file() or fpath.resolve().parent != IMPORT_DIR.resolve():
+            self._send(b"Not found", 404)
+            return
+        ct = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        dl = "?dl=1" in self.path
+        data = fpath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(data)))
+        if dl:
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):
         # /node-announce is JSON, not form-encoded.
@@ -1255,9 +1536,56 @@ class _Handler(BaseHTTPRequestHandler):
                 data = self.rfile.read(length)
                 IMPORT_DIR.mkdir(parents=True, exist_ok=True)
                 (IMPORT_DIR / fname).write_bytes(data)
+                _submit_to_hub(fname, data)
                 self._send(b"accepted", 202)
             except Exception as exc:
                 self._send(str(exc).encode(), 500)
+            return
+
+        if self.path == "/upload_firmware":
+            try:
+                ct = self.headers.get("Content-Type", "")
+                if "multipart/form-data" not in ct:
+                    raise ValueError("Expected multipart form data")
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length)
+                bm = re.search(r"boundary=([^\s;]+)", ct)
+                if not bm:
+                    raise ValueError("No multipart boundary")
+                boundary = b"--" + bm.group(1).encode()
+                parts = raw.split(boundary)
+                data = b""
+                filename = ""
+                for part in parts:
+                    if b'name="firmware"' not in part:
+                        continue
+                    fm = re.search(rb'filename="([^"]+)"', part)
+                    if not fm:
+                        continue
+                    filename = fm.group(1).decode()
+                    hdr_end = part.find(b"\r\n\r\n")
+                    if hdr_end < 0:
+                        continue
+                    data = part[hdr_end + 4:]
+                    if data.endswith(b"\r\n"):
+                        data = data[:-2]
+                    break
+                if not filename:
+                    raise ValueError("No file selected")
+                if not filename.endswith(".bin"):
+                    raise ValueError("Only .bin firmware files accepted")
+                if len(data) < 1024:
+                    raise ValueError("File too small to be firmware")
+                FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
+                dest = FIRMWARE_DIR / "usb_dongle.bin"
+                tmp = dest.with_suffix(".tmp")
+                tmp.write_bytes(data)
+                tmp.rename(dest)
+                ver = _firmware_bin_version(dest)
+                label = f" (v{ver})" if ver else ""
+                self._send(_page(f"Firmware uploaded: {filename}{label} ({len(data):,} bytes)"))
+            except Exception as exc:
+                self._send(_page(str(exc), error=True))
             return
 
         p = self._params()
@@ -1306,6 +1634,14 @@ class _Handler(BaseHTTPRequestHandler):
                 msg = f'Node {mac} named "{name}"' if name.strip() else f"Cleared name for {mac}"
                 self._send(_page(msg))
 
+            elif self.path == "/send_to_hub":
+                fname = p.get("file", [""])[0]
+                fpath = IMPORT_DIR / fname
+                if not fpath.is_file() or fpath.resolve().parent != IMPORT_DIR.resolve():
+                    raise FileNotFoundError(f"File not found: {fname}")
+                _submit_to_hub(fname, fpath.read_bytes())
+                self._send(_page(f"Sent {fname} to import hub."))
+
             elif self.path == "/clear_export":
                 n = _clear_export_files()
                 self._send(_page(f"Cleared {n} file(s) from export share."))
@@ -1339,6 +1675,13 @@ class _Handler(BaseHTTPRequestHandler):
                 msg = _wifi_flush_arp()
                 self._send(_page(msg))
 
+            elif self.path == "/archive_delete":
+                num = p.get("num", [""])[0]
+                if not re.match(r"^\d{5}$", num):
+                    raise ValueError("Invalid archive number")
+                _archive_delete(num)
+                self._send(_page(f"Deleted archive #{num}"))
+
             elif self.path == "/flash_esp":
                 port = p.get("port", [""])[0]
                 if not port:
@@ -1358,9 +1701,11 @@ if __name__ == "__main__":
     # Keep the relay-node SSH off the request path entirely.
     _probe_refresh()   # prime the cache so the first page is correct
     _edge_refresh()
+    _ensure_preserve_jobs()   # archive needs spool files kept
     threading.Thread(target=_probe_refresher, daemon=True).start()
     threading.Thread(target=_mediasource_refresher, daemon=True).start()
     threading.Thread(target=_edge_refresher, daemon=True).start()
+    threading.Thread(target=_archive_refresher, daemon=True).start()
 
     # Threaded: a single slow/blocked CUPS call must not freeze the whole UI.
     server = ThreadingHTTPServer(("0.0.0.0", PORT), _Handler)

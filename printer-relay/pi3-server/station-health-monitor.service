@@ -1,0 +1,13 @@
+[Unit]
+Description=WiFi station health monitor — deauth unresponsive clients
+After=hostapd.service
+Requires=hostapd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/station-health-monitor.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=USB CDC-ACM serial gadget for KardiSynch
+DefaultDependencies=no
+After=sys-kernel-config.mount
+Before=kardisynch-serial-sender.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/gadget-serial.sh
+ExecStop=/bin/bash -c 'echo "" > /sys/kernel/config/usb_gadget/kardisynch_serial/UDC 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=KardiSynch serial file sender
+After=network-online.target kardisynch-gadget-serial.service
+Wants=network-online.target
+Requires=kardisynch-gadget-serial.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/serial_sender.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

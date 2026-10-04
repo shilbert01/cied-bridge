@@ -25,10 +25,13 @@ PI="${PI:-10.99.0.1}"
 REMOTE_USER="${REMOTE_USER:-basti}"
 KEY="$HOME/.ssh/id_ed25519"
 SSH_OPTS=(-o IdentitiesOnly=yes -i "$KEY")
-SRC="$(cd "$(dirname "$0")/../printer-relay/pi3-server" && pwd)"
-EXPORT_SRC="$(cd "$(dirname "$0")/../export-relay/pi3-server" && pwd)"
-IMPORT_SRC="$(cd "$(dirname "$0")/../import-relay/pi3-server" && pwd)"
-TOOLS="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$REPO/printer-relay/pi3-server"
+EXPORT_SRC="$REPO/export-relay/pi3-server"
+IMPORT_SRC="$REPO/import-relay/pi3-server"
+TOOLS="$REPO/tools"
+SW_VERSION="$(cat "$REPO/VERSION" 2>/dev/null | tr -d '[:space:]')"
+SW_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 : "${AP_SSID:=relayap}"
 : "${AP_PASS:=RelayPrint#1}"
@@ -64,6 +67,8 @@ _scp \
     "$SRC/usb-reset-printer.sh" \
     "$SRC/hostapd-station-handler.sh" \
     "$SRC/hostapd-station-handler.service" \
+    "$SRC/station-health-monitor.sh" \
+    "$SRC/station-health-monitor.service" \
     "$SRC/99-usb-printer.rules" \
     "$TOOLS/feature-lib.sh" \
     "$TOOLS/configure-clinic.sh" \
@@ -97,6 +102,8 @@ AP_HIDE="$AP_HIDE"
 AP_IP="$AP_IP"
 AP_DHCP_START="$AP_DHCP_START"
 AP_DHCP_END="$AP_DHCP_END"
+SW_VERSION="$SW_VERSION"
+SW_COMMIT="$SW_COMMIT"
 WIFI_COUNTRY="$WIFI_COUNTRY"
 
 # ── Detect fresh system ─────────────────────────────────────────────────────
@@ -107,7 +114,8 @@ which cups >/dev/null 2>&1    || FRESH=1
 if [ "\$FRESH" = 1 ]; then
     echo ">> [fresh system] installing packages"
     sudo apt-get update -qq
-    sudo apt-get install -y hostapd dnsmasq cups cups-bsd chrony samba ipp-usb rfkill python3-pip
+    sudo apt-get install -y hostapd dnsmasq cups cups-bsd chrony samba ipp-usb rfkill python3-pip util-linux-extra
+    sudo apt-get install -y ghostpcl 2>/dev/null || echo "   ghostpcl not available — PCL→PDF archive conversion disabled"
 fi
 
 # ── Feature manifest ────────────────────────────────────────────────────────
@@ -118,6 +126,14 @@ if [ ! -f /etc/pacemaker/clinic.conf ]; then
     sudo install -m 600 /tmp/clinic.conf.example /etc/pacemaker/clinic.conf
     echo '   seeded clinic.conf'
 fi
+
+# ── Software version stamp ─────────────────────────────────────────────────
+sudo tee /etc/pacemaker/version >/dev/null << EOF
+version=\$SW_VERSION
+commit=\$SW_COMMIT
+deployed=\$(date -Iseconds)
+EOF
+echo "   version \$SW_VERSION (\$SW_COMMIT)"
 
 # ── Relay AP (hostapd + dnsmasq + static IP) ────────────────────────────────
 if [ "\$FRESH" = 1 ] || [ ! -f /etc/hostapd/hostapd.conf ]; then
@@ -282,23 +298,29 @@ sudo install -m 755 /tmp/cups-autoconf-printer.sh    /usr/local/sbin/
 sudo install -m 755 /tmp/relay-print-watchdog.sh     /usr/local/sbin/
 sudo install -m 755 /tmp/usb-reset-printer.sh        /usr/local/sbin/
 sudo install -m 755 /tmp/hostapd-station-handler.sh  /usr/local/sbin/
+sudo install -m 755 /tmp/station-health-monitor.sh   /usr/local/sbin/
 sudo install -m 644 /tmp/printer-config.service /tmp/ipp-usb-ensure.service \
     /tmp/relay-print-watchdog.service /tmp/relay-print-watchdog.timer \
-    /tmp/hostapd-station-handler.service /etc/systemd/system/
+    /tmp/hostapd-station-handler.service /tmp/station-health-monitor.service /etc/systemd/system/
 sudo install -m 644 /tmp/99-usb-printer.rules /etc/udev/rules.d/ 2>/dev/null || true
 [ -f /tmp/deploy-printer-config ] && sudo install -m 755 /tmp/deploy-printer-config /usr/local/sbin/ 2>/dev/null || true
 sudo udevadm control --reload-rules 2>/dev/null || true
 
-sudo mkdir -p /var/lib/relay-ui
+sudo mkdir -p /var/lib/relay-ui /var/lib/relay-ui/job-archive
 sudo mkdir -p /usr/local/share/relay-firmware
+# ghostpcl for PCL→PDF archive conversion (may already be installed from fresh setup)
+which gpcl6 >/dev/null 2>&1 || sudo apt-get install -y ghostpcl 2>/dev/null || true
 [ -f /tmp/usb_dongle.bin ] && sudo install -m 644 /tmp/usb_dongle.bin /usr/local/share/relay-firmware/
 sudo rm -f /var/lib/printer-autoconf/decision
 
 # esptool for USB firmware flashing from the web UI
-which esptool.py >/dev/null 2>&1 || sudo pip3 install esptool --break-system-packages 2>/dev/null || true
+if ! which esptool.py >/dev/null 2>&1; then
+    which pip3 >/dev/null 2>&1 || sudo apt-get install -y python3-pip 2>/dev/null || true
+    sudo pip3 install esptool --break-system-packages 2>/dev/null || true
+fi
 
 sudo systemctl enable ipp-usb-ensure 2>/dev/null || true
-sudo systemctl enable --now hostapd-station-handler 2>/dev/null || true
+sudo systemctl enable --now hostapd-station-handler station-health-monitor 2>/dev/null || true
 sudo systemctl enable printer-config 2>/dev/null || true
 
 # ── Export server ───────────────────────────────────────────────────────────
@@ -363,6 +385,13 @@ if [ -f "\$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "\$BOOT_CMDLINE"; then
     sudo sed -i 's/ *dwc_otg\.speed=[0-9]*//' "\$BOOT_CMDLINE"
 fi
 
+# ── RTC sync ───────────────────────────────────────────────────────────
+# hwclock is in util-linux-extra (not installed by default on Debian 13)
+which hwclock >/dev/null 2>&1 || sudo apt-get install -y util-linux-extra 2>/dev/null || true
+if [ -e /dev/rtc0 ] && which hwclock >/dev/null 2>&1; then
+    sudo hwclock -w 2>/dev/null && echo "   RTC synced to system clock" || true
+fi
+
 # ── lpadmin group ───────────────────────────────────────────────────────────
 sudo usermod -aG lpadmin "\$(whoami)" 2>/dev/null || true
 
@@ -388,6 +417,7 @@ echo "   smbd:      \$(systemctl is-active smbd 2>/dev/null || echo 'n/a')"
 echo "   export:    \$(systemctl is-active export-config 2>/dev/null || echo 'n/a')"
 echo "   import:    \$(systemctl is-active import-server 2>/dev/null || echo 'n/a')"
 echo "   watchdog:  \$(systemctl is-active relay-print-watchdog.timer)"
+echo "   sta-health:\$(systemctl is-active station-health-monitor)"
 ENDSCRIPT
 
 # ── Push and execute ─────────────────────────────────────────────────────────

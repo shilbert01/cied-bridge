@@ -14,3 +14,9 @@ edge-node/buildroot/
 # Pico2W build artifacts
 printer-relay/pico2w/build/
 printer-relay/pico2w/.pio/
+
+# .NET build artifacts
+**/bin/
+**/obj/
+**/publish/
+**/publish-single/

@@ -8,14 +8,29 @@ GET  /                — HTML status page listing received files
 POST /clear-files     — delete all files in IMPORT_DIR
 """
 
+import json
 import os
+import socket
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
-IMPORT_DIR = Path("/var/lib/pacemaker-export/import")
-PORT       = 8080
+IMPORT_DIR   = Path("/var/lib/pacemaker-export/import")
+PORT         = 8080
+VERSION_FILE = Path("/etc/pacemaker/version")
+
+
+def _read_version() -> dict:
+    info = {"version": "unknown", "commit": "unknown", "deployed": "unknown"}
+    try:
+        for line in VERSION_FILE.read_text().splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                info[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return info
 
 
 def _file_rows() -> str:
@@ -106,6 +121,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == "/api/version":
+            info = _read_version()
+            info["hostname"] = socket.gethostname()
+            self._send(json.dumps(info).encode(), content_type="application/json")
+            return
         if self.path == "/":
             self._send(_html())
         else:

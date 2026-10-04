@@ -122,11 +122,12 @@ def inject_files(img_path: str, files: list, subdir: str) -> list:
         dest_dir.mkdir(parents=True, exist_ok=True)
         for src in files:
             src = Path(src)
+            clean_name = src.name.split("__", 1)[-1] if "__" in src.name else src.name
             try:
-                shutil.copy(str(src), str(dest_dir / src.name))
+                shutil.copy(str(src), str(dest_dir / clean_name))
                 written.append(src)
                 logging.info("Injected: %s -> drive:/%s%s",
-                             src.name, (subdir + "/") if subdir else "", src.name)
+                             clean_name, (subdir + "/") if subdir else "", clean_name)
             except OSError as e:
                 logging.error("Failed to inject %s: %s", src.name, e)
         subprocess.run(["sync"], timeout=MOUNT_TIMEOUT)
