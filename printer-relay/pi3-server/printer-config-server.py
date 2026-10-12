@@ -717,7 +717,6 @@ def _archive_scan() -> None:
                 continue
 
             _archive_convert(pcl_path, pdf_path)
-            _cancel(job["id"], purge=True)
 
 
 def _archive_retention() -> None:
