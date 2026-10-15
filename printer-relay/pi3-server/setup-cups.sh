@@ -4,14 +4,15 @@
 # Combined hub: printer relay + data export. Roles are composable via
 # clinic.conf feature flags (all default to on).
 #
-# Creates a WiFi AP (relayap) on wlan0 for relay nodes (ESP32, Pi Zero).
+# Creates a WiFi AP (relayap) on the relay interface for relay nodes (ESP32, Pi Zero).
 # eth0 stays on the main LAN for management.
+# If an RT5370 USB adapter is present, udev pins it to wlan_ap for stable naming.
 #
 # Printer role: CUPS raw queue + LPR (port 515) + USB autoconf + watchdog + web UI.
 # Data role:    Samba share (\\PI3\import) + export ingest server + import hub.
 #
 # Subnet:  10.99.0.0/24
-#   Pi3 wlan0:    10.99.0.1
+#   Pi3 AP iface: 10.99.0.1
 #   Relay nodes:  10.99.0.2+ (static or DHCP)
 #
 # AP passphrase is RelayPrint#1 — change in /etc/hostapd/hostapd.conf after setup.
@@ -32,7 +33,37 @@ CLINIC_CONF="${CLINIC_CONF:-/etc/pacemaker/clinic.conf}"
 type feature_enabled >/dev/null 2>&1 || feature_enabled() { eval "_v=\${$1:-}"; case "$(printf %s "$_v"|tr A-Z a-z)" in on|yes|1|true) return 0;; *) return 1;; esac; }
 type apply_feature_service >/dev/null 2>&1 || apply_feature_service() { f=$1; shift; if feature_enabled "$f"; then systemctl enable $* >/dev/null 2>&1||true; systemctl restart $* >/dev/null 2>&1||true; else systemctl disable --now $* >/dev/null 2>&1||true; fi; }
 
-AP_IFACE=wlan0
+# ── Pin WiFi interface names via udev ────────────────────────────────────────
+# USB adapter enumeration order is not stable across reboots — wlan0/wlan1 can
+# swap. Pin by MAC so hostapd always gets the right radio.
+_pin_wifi_interfaces() {
+    local rt5370_mac onboard_mac
+    rt5370_mac=$(ip -o link | awk '/148f:5370|rt2800usb/ || /phy#/{next} /link\/ether/{print $0}' | head -1)
+    # Find RT5370 by its USB vendor:product in the sysfs path
+    for dev in /sys/class/net/wlan*; do
+        [ -e "$dev/device" ] || continue
+        local usbdev=$(readlink -f "$dev/device" 2>/dev/null)
+        if echo "$usbdev" | grep -q "148f.*5370" 2>/dev/null; then
+            rt5370_mac=$(cat "$dev/address" 2>/dev/null)
+        else
+            onboard_mac=$(cat "$dev/address" 2>/dev/null)
+        fi
+    done
+    if [ -n "$rt5370_mac" ]; then
+        local rules=/etc/udev/rules.d/70-wifi-names.rules
+        cat > "$rules" << EOF
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="$rt5370_mac", NAME="wlan_ap"
+${onboard_mac:+SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$onboard_mac\", NAME=\"wlan_int\"}
+EOF
+        echo "   udev: RT5370 ($rt5370_mac) -> wlan_ap${onboard_mac:+, onboard ($onboard_mac) -> wlan_int}"
+        echo "wlan_ap"
+    else
+        echo "   no RT5370 found, using wlan0" >&2
+        echo "wlan0"
+    fi
+}
+
+AP_IFACE=$(_pin_wifi_interfaces)
 AP_IP=10.99.0.1
 AP_SUBNET=10.99.0.0
 AP_NETMASK=255.255.255.0
@@ -58,16 +89,16 @@ raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null \
     || iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
 rfkill unblock wifi 2>/dev/null || rfkill unblock wlan 2>/dev/null || true
 
-# ── Prevent NetworkManager / wpa_supplicant from touching wlan0 ──────────────
+# ── Prevent NetworkManager / wpa_supplicant from touching the AP interface ───
 mkdir -p /etc/NetworkManager/conf.d
-cat > /etc/NetworkManager/conf.d/99-relay-ap.conf << 'EOF'
+cat > /etc/NetworkManager/conf.d/99-relay-ap.conf << EOF
 [keyfile]
-unmanaged-devices=interface-name:wlan0
+unmanaged-devices=interface-name:${AP_IFACE}
 EOF
 systemctl restart NetworkManager 2>/dev/null || true
 
-# ── Static IP on wlan0 ───────────────────────────────────────────────────────
-# Modern Raspberry Pi OS uses NetworkManager, not dhcpcd.  wlan0 is unmanaged
+# ── Static IP on the AP interface ────────────────────────────────────────────
+# Modern Raspberry Pi OS uses NetworkManager, not dhcpcd.  The AP iface is unmanaged
 # by NM (see conf.d above) so we need a systemd oneshot to assign the IP after
 # hostapd brings the interface up.
 
@@ -90,7 +121,7 @@ systemctl daemon-reload
 systemctl enable relay-ap-ip.service
 
 # Apply immediately (in case hostapd is already running). Tolerate failure here:
-# hostapd brings wlan0 up itself, and we must not abort the whole setup if the
+# hostapd brings the AP iface up itself, and we must not abort the whole setup if the
 # interface is briefly still blocked/renaming.
 ip addr add "${AP_IP}/24" dev "$AP_IFACE" 2>/dev/null || true
 ip link set "$AP_IFACE" up 2>/dev/null || true
@@ -138,18 +169,20 @@ chmod 600 /etc/hostapd/hostapd.conf
 # Point hostapd at the config
 sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
 
-# ── ARP — fast expiry on wlan0 so reconnecting edge nodes aren't blocked ─────
-cat > /etc/sysctl.d/90-wlan0-arp.conf << EOF
-net.ipv4.neigh.wlan0.base_reachable_time_ms = 5000
-net.ipv4.neigh.wlan0.gc_stale_time = 5
-net.ipv4.neigh.wlan0.delay_first_probe_time = 1
+# ── ARP — fast expiry on AP iface so reconnecting edge nodes aren't blocked ──
+cat > /etc/sysctl.d/90-relay-ap-arp.conf << EOF
+net.ipv4.neigh.${AP_IFACE}.base_reachable_time_ms = 5000
+net.ipv4.neigh.${AP_IFACE}.gc_stale_time = 5
+net.ipv4.neigh.${AP_IFACE}.delay_first_probe_time = 1
 EOF
+# Clean up old fixed-name file if present
+rm -f /etc/sysctl.d/90-wlan0-arp.conf
 
 # ── dnsmasq — DHCP on relay subnet (Pi Zero uses static, but keep for fallback) ──
 # Back up original config if present
 [ -f /etc/dnsmasq.conf ] && mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
 
-# bind-dynamic (not bind-interfaces): wlan0 may not be up / may have no address
+# bind-dynamic (not bind-interfaces): the AP iface may not be up / may have no address
 # when dnsmasq starts (hostapd + the static-IP oneshot run around the same time);
 # bind-dynamic binds as the address appears instead of failing at startup.
 # No dhcp-host line: the range below is the pool, and the Pi Zero uses a static
@@ -212,7 +245,7 @@ for f in /usr/lib/cups/backend/usb; do
     [ -f "$f" ] && chmod 755 "$f"
 done
 
-# Listen on all interfaces so both wlan0 (Pi Zero) and eth0 (management) work
+# Listen on all interfaces so both the AP (Pi Zero) and eth0 (management) work
 sed -i 's/^Listen localhost:631$/Listen 0.0.0.0:631/' /etc/cups/cupsd.conf
 
 # Allow access from relay subnet and main LAN
@@ -225,8 +258,10 @@ cupsctl --share-printers --remote-any
 
 # Enable LPR (port 515). Debian 13's cups-bsd ships only the cups-lpd binary,
 # not a systemd socket unit, so create the socket-activation units ourselves.
-# Raw passthrough (octet-stream): the relay forwards the programmer's PostScript/
-# PCL as-is and CUPS must not re-filter it.
+# Raw passthrough: the relay forwards the programmer's PostScript/PCL as-is.
+# -o raw bypasses the CUPS filter chain entirely — without it, CUPS's auto-typing
+# fails to detect PJL+PCL that lacks "@PJL ENTER LANGUAGE" (e.g. Abbott) and the
+# "everywhere" queue renders the PJL header as a text page.
 cat > /etc/systemd/system/cups-lpd.socket << 'EOF'
 [Unit]
 Description=CUPS LPD Protocol Listener (relay LPR on 515)
@@ -244,7 +279,7 @@ cat > /etc/systemd/system/cups-lpd@.service << 'EOF'
 Description=CUPS LPD per-connection server
 
 [Service]
-ExecStart=/usr/lib/cups/daemon/cups-lpd -o document-format=application/octet-stream
+ExecStart=/usr/lib/cups/daemon/cups-lpd -o raw
 StandardInput=socket
 StandardError=journal
 User=lp
@@ -394,7 +429,7 @@ fi
 
 echo ""
 echo "Relay AP:  ssid=${AP_SSID} $([ "$AP_HIDE" = 2 ] && echo '(hidden)' || echo '(broadcast)')  passphrase=${AP_PASS}"
-echo "Pi3 wlan0: ${AP_IP}"
+echo "Pi3 ${AP_IFACE}: ${AP_IP}"
 echo "Pi3 eth0:  $(ip -4 addr show eth0 2>/dev/null | awk '/inet /{print $2}' || echo 'check manually')"
 echo ""
 echo "Features:"

@@ -75,6 +75,7 @@ _scp \
     "$TOOLS/clinic.conf.example"
 
 [ -f "$SRC/deploy-printer-config" ] && _scp "$SRC/deploy-printer-config"
+[ -f "$SRC/gpcl6" ] && _scp "$SRC/gpcl6" && echo "   + gpcl6 (PCL→PDF converter)"
 
 [ -f "$EXPORT_SRC/export-config-server.py" ] && _scp \
     "$EXPORT_SRC/export-config-server.py" \
@@ -106,10 +107,38 @@ SW_VERSION="$SW_VERSION"
 SW_COMMIT="$SW_COMMIT"
 WIFI_COUNTRY="$WIFI_COUNTRY"
 
+# ── Pin WiFi interface names via udev (RT5370 → wlan_ap, onboard → wlan_int) ─
+_pin_wifi_interfaces() {
+    local ap_mac="" ap_name="wlan_ap" int_name="wlan_int" onboard_mac="" rules=""
+    for dev in /sys/class/net/wlan*; do
+        [ -d "\$dev" ] || continue
+        local mac=\$(< "\$dev/address")
+        local uevent="\$dev/device/uevent"
+        if [ -f "\$uevent" ] && grep -q '148F.*5370\|5370.*148F' "\$uevent" 2>/dev/null; then
+            ap_mac="\$mac"
+        elif [[ "\$mac" == b8:27:eb:* ]] || [[ "\$mac" == dc:a6:32:* ]] || [[ "\$mac" == d8:3a:dd:* ]] || [[ "\$mac" == e4:5f:01:* ]]; then
+            onboard_mac="\$mac"
+        fi
+    done
+
+    if [ -n "\$ap_mac" ]; then
+        rules="SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"\$ap_mac\", NAME=\"\$ap_name\""
+        [ -n "\$onboard_mac" ] && rules="\$rules\nSUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"\$onboard_mac\", NAME=\"\$int_name\""
+        printf '%b\n' "\$rules" | sudo tee /etc/udev/rules.d/70-wifi-names.rules >/dev/null
+        echo "   udev: \$ap_mac → \$ap_name" >&2
+        echo "\$ap_name"
+    else
+        echo "   no RT5370 found, using wlan0" >&2
+        echo "wlan0"
+    fi
+}
+
+AP_IFACE=\$(_pin_wifi_interfaces)
+
 # ── Detect fresh system ─────────────────────────────────────────────────────
 FRESH=0
-which hostapd >/dev/null 2>&1 || FRESH=1
-which cups >/dev/null 2>&1    || FRESH=1
+command -v hostapd >/dev/null 2>&1 || type hostapd >/dev/null 2>&1 || [ -x /usr/sbin/hostapd ] || FRESH=1
+command -v cupsd   >/dev/null 2>&1 || type cupsd   >/dev/null 2>&1 || [ -x /usr/sbin/cupsd ]   || FRESH=1
 
 if [ "\$FRESH" = 1 ]; then
     echo ">> [fresh system] installing packages"
@@ -142,13 +171,13 @@ if [ "\$FRESH" = 1 ] || [ ! -f /etc/hostapd/hostapd.conf ]; then
     sudo rfkill unblock wifi 2>/dev/null || sudo rfkill unblock wlan 2>/dev/null || true
     sudo iw reg set "\$WIFI_COUNTRY" 2>/dev/null || true
 
-    # Prevent NetworkManager from touching wlan0
+    # Prevent NetworkManager from touching the AP interface
     sudo mkdir -p /etc/NetworkManager/conf.d
-    printf '[keyfile]\nunmanaged-devices=interface-name:wlan0\n' | sudo tee /etc/NetworkManager/conf.d/99-relay-ap.conf >/dev/null
+    printf '[keyfile]\nunmanaged-devices=interface-name:%s\n' "\$AP_IFACE" | sudo tee /etc/NetworkManager/conf.d/99-relay-ap.conf >/dev/null
     sudo systemctl restart NetworkManager 2>/dev/null || true
 
     sudo tee /etc/hostapd/hostapd.conf >/dev/null << EOF
-interface=wlan0
+interface=\$AP_IFACE
 driver=nl80211
 ctrl_interface=/var/run/hostapd
 ctrl_interface_group=0
@@ -176,14 +205,14 @@ EOF
     # Static IP via systemd oneshot
     sudo tee /etc/systemd/system/relay-ap-ip.service >/dev/null << EOF
 [Unit]
-Description=Static IP for relay AP (wlan0)
+Description=Static IP for relay AP (\$AP_IFACE)
 After=hostapd.service
 Requires=hostapd.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/sbin/ip addr add \$AP_IP/24 dev wlan0
+ExecStart=/sbin/ip addr add \$AP_IP/24 dev \$AP_IFACE
 
 [Install]
 WantedBy=multi-user.target
@@ -191,13 +220,13 @@ EOF
     sudo systemctl daemon-reload
     sudo systemctl enable relay-ap-ip.service
 
-    sudo ip addr add "\$AP_IP/24" dev wlan0 2>/dev/null || true
-    sudo ip link set wlan0 up 2>/dev/null || true
+    sudo ip addr add "\$AP_IP/24" dev "\$AP_IFACE" 2>/dev/null || true
+    sudo ip link set "\$AP_IFACE" up 2>/dev/null || true
 
     # dnsmasq
     [ -f /etc/dnsmasq.conf ] && [ ! -f /etc/dnsmasq.conf.orig ] && sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
     sudo tee /etc/dnsmasq.d/relay-ap.conf >/dev/null << EOF
-interface=wlan0
+interface=\$AP_IFACE
 bind-dynamic
 dhcp-range=\$AP_DHCP_START,\$AP_DHCP_END,12h
 EOF
@@ -226,9 +255,9 @@ fi
 
 # ARP + power save
 sudo rm -f /etc/sysctl.d/90-wlan0-arp.conf
-sudo sysctl -w net.ipv4.neigh.wlan0.base_reachable_time_ms=30000 2>/dev/null || true
-sudo sysctl -w net.ipv4.neigh.wlan0.gc_stale_time=60 2>/dev/null || true
-sudo iw dev wlan0 set power_save off 2>/dev/null || true
+sudo sysctl -w "net.ipv4.neigh.\$AP_IFACE.base_reachable_time_ms=30000" 2>/dev/null || true
+sudo sysctl -w "net.ipv4.neigh.\$AP_IFACE.gc_stale_time=60" 2>/dev/null || true
+sudo iw dev "\$AP_IFACE" set power_save off 2>/dev/null || true
 
 # ── CUPS + LPR ──────────────────────────────────────────────────────────────
 if which cups >/dev/null 2>&1; then
@@ -251,18 +280,20 @@ Accept=yes
 [Install]
 WantedBy=sockets.target
 EOF
-        sudo tee /etc/systemd/system/cups-lpd@.service >/dev/null << 'EOF'
+    fi
+    # Always write the service file — -o raw bypasses CUPS filtering so PJL+PCL
+    # from programmers (Abbott) doesn't get rendered as a text page.
+    sudo tee /etc/systemd/system/cups-lpd@.service >/dev/null << 'EOF'
 [Unit]
 Description=CUPS LPD per-connection server
 
 [Service]
-ExecStart=/usr/lib/cups/daemon/cups-lpd -o document-format=application/octet-stream
+ExecStart=/usr/lib/cups/daemon/cups-lpd -o raw
 StandardInput=socket
 StandardError=journal
 User=lp
 Group=lp
 EOF
-    fi
 
     if [ ! -f /etc/systemd/system/cups-lpd-ensure.service ]; then
         sudo tee /etc/systemd/system/cups-lpd-ensure.service >/dev/null << 'EOF'
@@ -308,8 +339,8 @@ sudo udevadm control --reload-rules 2>/dev/null || true
 
 sudo mkdir -p /var/lib/relay-ui /var/lib/relay-ui/job-archive
 sudo mkdir -p /usr/local/share/relay-firmware
-# ghostpcl for PCL→PDF archive conversion (may already be installed from fresh setup)
-which gpcl6 >/dev/null 2>&1 || sudo apt-get install -y ghostpcl 2>/dev/null || true
+# gpcl6 for PCL→PDF archive conversion (not packaged in Debian 13, shipped as binary)
+[ -f /tmp/gpcl6 ] && sudo install -m 755 /tmp/gpcl6 /usr/local/bin/gpcl6 && echo "   gpcl6 installed"
 [ -f /tmp/usb_dongle.bin ] && sudo install -m 644 /tmp/usb_dongle.bin /usr/local/share/relay-firmware/
 sudo rm -f /var/lib/printer-autoconf/decision
 

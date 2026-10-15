@@ -698,15 +698,16 @@ def _archived_jobs() -> list[dict]:
 def _archive_scan() -> None:
     with _archive_lock:
         JOB_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-        existing = {f.stem for f in JOB_ARCHIVE_DIR.glob("*.pdf")}
-        existing |= {f.stem for f in JOB_ARCHIVE_DIR.glob("*.pcl")}
+        existing_pcl = {f.stem for f in JOB_ARCHIVE_DIR.glob("*.pcl")}
+        existing_pdf = {f.stem for f in JOB_ARCHIVE_DIR.glob("*.pdf")}
 
+        # Copy new completed jobs from CUPS spool into the archive.
         jobs = _all_jobs()
         for job in jobs:
             if job["active"] or not job["has_file"]:
                 continue
             num = job["num"].zfill(5)
-            if num in existing:
+            if num in existing_pcl:
                 continue
 
             pcl_path = JOB_ARCHIVE_DIR / f"{num}.pcl"
@@ -715,8 +716,16 @@ def _archive_scan() -> None:
                 shutil.copy2(job["spool"], pcl_path)
             except Exception:
                 continue
-
+            existing_pcl.add(num)
             _archive_convert(pcl_path, pdf_path)
+
+        # Retry PDF conversion for any PCL files still missing a PDF
+        # (e.g. gpcl6 was not installed when the job was first archived).
+        for num in existing_pcl - existing_pdf:
+            pcl_path = JOB_ARCHIVE_DIR / f"{num}.pcl"
+            pdf_path = JOB_ARCHIVE_DIR / f"{num}.pdf"
+            if pcl_path.exists():
+                _archive_convert(pcl_path, pdf_path)
 
 
 def _archive_retention() -> None:
@@ -910,6 +919,16 @@ def _usb_diag() -> dict:
     cur_uri = _current_uri() or ""
     diag["uses_usblp"] = cur_uri.startswith("usblp:")
 
+    # Disk space
+    try:
+        st = os.statvfs("/")
+        total = st.f_frsize * st.f_blocks
+        free = st.f_frsize * st.f_bavail
+        diag["disk_total"] = total
+        diag["disk_free"] = free
+    except Exception:
+        pass
+
     # Overall health assessment
     problems = []
     if not diag["usb_devices"]:
@@ -934,6 +953,10 @@ def _usb_diag() -> dict:
         problems.append((f"{diag['pending_jobs']} jobs queued",
                          "Jobs may be backed up. If nothing is printing, "
                          "cancel all and power cycle the printer."))
+    if diag.get("disk_free", float("inf")) < 500_000_000:
+        problems.append(("Disk space low",
+                         f"Only {diag['disk_free'] / 1e6:.0f} MB free. "
+                         "Clear old jobs from the Archive tab."))
     diag["problems"] = problems
     if diag["uses_usblp"]:
         diag["healthy"] = (len(problems) == 0 and bool(diag["usb_devices"])
@@ -1379,6 +1402,9 @@ def _page(message: str = "", error: bool = False) -> bytes:
       <tr><td>Print queue</td><td>{'<span class="ok">enabled</span>' if diag.get('queue_enabled') else '<span class="error">disabled</span>'}
         {', idle' if diag.get('queue_idle') else ''}</td></tr>
       <tr><td>Pending jobs</td><td>{diag.get('pending_jobs', 0)}</td></tr>
+      {f'<tr><td>Disk space</td><td>{diag["disk_free"] / 1e9:.1f} GB free / {diag["disk_total"] / 1e9:.1f} GB total'
+       f'{" <span class=error>(low!)</span>" if diag["disk_free"] < 500_000_000 else ""}</td></tr>'
+       if 'disk_free' in diag else ''}
     </table>
 
     <h2>Actions</h2>
