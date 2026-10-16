@@ -13,8 +13,8 @@ set +e
 
 IFACE=$(grep -s '^interface=' /etc/hostapd/hostapd.conf | cut -d= -f2)
 IFACE=${IFACE:-wlan0}
-FAIL_THRESHOLD=3
-INTERVAL=2
+FAIL_THRESHOLD=5
+INTERVAL=5
 TAG=station-health
 
 declare -A fail_count
