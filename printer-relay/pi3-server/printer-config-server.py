@@ -307,11 +307,18 @@ def _edge_refresh() -> None:
     for mac in _node_firmware():
         nodes.setdefault(mac, {"ip": "", "mac": mac})
 
+    hidden = _hidden_nodes()
+    live_macs = set(nodes.keys())
+
     result = []
     for mac, n in nodes.items():
         n["host"]   = hosts.get(mac, "")
         n["is_pi"]  = any(mac.startswith(o) for o in PI_OUIS)
         n["online"] = _ping(n["ip"]) if n["ip"] else False
+        if mac in hidden and not n["online"]:
+            continue
+        if mac in hidden and n["online"]:
+            _unhide_node(mac)
         result.append(n)
     result.sort(key=lambda x: (not x["is_pi"], x["ip"] or "z"))
 
@@ -509,15 +516,17 @@ def _reprint(spool: str) -> None:
 # User-assigned labels for relay nodes, keyed by MAC (stable per unit), so a tech
 # can call a node "Cathlab-2" instead of reading relay-pizero-XXXXXX. Persisted on
 # the Pi3; no firmware/node change needed.
-NODE_NAMES_FILE = Path("/var/lib/relay-ui/node-names.json")
-NODE_FW_FILE    = Path("/var/lib/relay-ui/node-firmware.json")
-FIRMWARE_DIR    = Path("/usr/local/share/relay-firmware")
-JOB_ARCHIVE_DIR = Path("/var/lib/relay-ui/job-archive")
+NODE_NAMES_FILE  = Path("/var/lib/relay-ui/node-names.json")
+NODE_FW_FILE     = Path("/var/lib/relay-ui/node-firmware.json")
+NODE_HIDDEN_FILE = Path("/var/lib/relay-ui/node-hidden.json")
+FIRMWARE_DIR     = Path("/usr/local/share/relay-firmware")
+JOB_ARCHIVE_DIR  = Path("/var/lib/relay-ui/job-archive")
 ARCHIVE_RETENTION_DAYS = 30
 ARCHIVE_MAX_JOBS = 200
 ARCHIVE_SCAN_INTERVAL = 15
-_names_lock = threading.Lock()
-_fw_lock    = threading.Lock()
+_names_lock  = threading.Lock()
+_fw_lock     = threading.Lock()
+_hidden_lock = threading.Lock()
 _archive_lock = threading.Lock()
 
 
@@ -553,6 +562,65 @@ def _node_firmware() -> dict:
             return json.loads(NODE_FW_FILE.read_text())
         except Exception:
             return {}
+
+
+def _hidden_nodes() -> set:
+    with _hidden_lock:
+        try:
+            return set(json.loads(NODE_HIDDEN_FILE.read_text()))
+        except Exception:
+            return set()
+
+
+def _hide_node(mac: str) -> None:
+    mac = (mac or "").strip().lower()
+    if not mac:
+        return
+    with _hidden_lock:
+        try:
+            data = set(json.loads(NODE_HIDDEN_FILE.read_text()))
+        except Exception:
+            data = set()
+        data.add(mac)
+        NODE_HIDDEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NODE_HIDDEN_FILE.write_text(json.dumps(sorted(data)))
+
+
+def _unhide_node(mac: str) -> None:
+    mac = (mac or "").strip().lower()
+    if not mac:
+        return
+    with _hidden_lock:
+        try:
+            data = set(json.loads(NODE_HIDDEN_FILE.read_text()))
+        except Exception:
+            data = set()
+        data.discard(mac)
+        NODE_HIDDEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NODE_HIDDEN_FILE.write_text(json.dumps(sorted(data)))
+
+
+def _remove_node(mac: str) -> None:
+    mac = (mac or "").strip().lower()
+    if not mac:
+        return
+    with _names_lock:
+        try:
+            data = json.loads(NODE_NAMES_FILE.read_text())
+        except Exception:
+            data = {}
+        data.pop(mac, None)
+        NODE_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NODE_NAMES_FILE.write_text(json.dumps(data))
+    with _fw_lock:
+        try:
+            data = json.loads(NODE_FW_FILE.read_text())
+        except Exception:
+            data = {}
+        data.pop(mac, None)
+        NODE_FW_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NODE_FW_FILE.write_text(json.dumps(data))
+    _hide_node(mac)
 
 
 def _set_node_firmware(mac: str, node_id: str, firmware: str) -> None:
@@ -600,12 +668,41 @@ def _usb_esp_devices() -> list[dict]:
     return devices
 
 
-def _latest_firmware_bin() -> Path | None:
-    """Return the newest .bin file in the firmware directory."""
+BOARD_TYPES = {
+    "devkitc": "DevKitC",
+    "tdongle": "T-Dongle-S3",
+}
+DEFAULT_BOARD = "devkitc"
+
+
+def _firmware_bin(board: str = "") -> Path | None:
+    """Return the firmware binary for a board type, or the newest .bin as fallback."""
     if not FIRMWARE_DIR.is_dir():
         return None
+    if board and board in BOARD_TYPES:
+        p = FIRMWARE_DIR / f"{board}.bin"
+        if p.exists():
+            return p
+    # Fallback: legacy usb_dongle.bin or newest .bin
+    legacy = FIRMWARE_DIR / "usb_dongle.bin"
+    if legacy.exists():
+        return legacy
     bins = sorted(FIRMWARE_DIR.glob("*.bin"), key=lambda f: f.stat().st_mtime, reverse=True)
     return bins[0] if bins else None
+
+
+def _firmware_versions() -> dict[str, str]:
+    """Return {board: version} for each board that has a firmware file."""
+    versions = {}
+    for board in BOARD_TYPES:
+        fw = FIRMWARE_DIR / f"{board}.bin"
+        if fw.exists():
+            versions[board] = _firmware_bin_version(fw)
+    # Also check legacy file
+    legacy = FIRMWARE_DIR / "usb_dongle.bin"
+    if legacy.exists() and not versions:
+        versions["devkitc"] = _firmware_bin_version(legacy)
+    return versions
 
 
 def _firmware_bin_version(fw: Path | None) -> str:
@@ -625,11 +722,12 @@ def _firmware_bin_version(fw: Path | None) -> str:
         return ""
 
 
-def _flash_esp(port: str) -> str:
-    """Flash the latest firmware binary to an ESP32-S3 on the given serial port."""
-    fw = _latest_firmware_bin()
+def _flash_esp(port: str, board: str = "") -> str:
+    """Flash firmware to an ESP32-S3 on the given serial port."""
+    fw = _firmware_bin(board)
     if not fw:
-        return f"No firmware binary found in {FIRMWARE_DIR}"
+        label = BOARD_TYPES.get(board, board) if board else "any board"
+        return f"No firmware binary for {label} in {FIRMWARE_DIR}"
     if not Path(port).exists():
         return f"Serial port {port} not found"
     try:
@@ -640,7 +738,7 @@ def _flash_esp(port: str) -> str:
              "--flash_size", "16MB", "0x10000", str(fw)],
             capture_output=True, text=True, timeout=120)
         if r.returncode == 0:
-            return f"Flashed {fw.name} to {port} successfully."
+            return f"Flashed {fw.name} ({BOARD_TYPES.get(board, 'generic')}) to {port} successfully."
         return f"Flash failed: {r.stderr[-500:]}"
     except subprocess.TimeoutExpired:
         return "Flash timed out after 120 seconds."
@@ -1119,8 +1217,8 @@ def _page(message: str = "", error: bool = False) -> bytes:
     mediasrc, ms_fresh = _mediasource_cached()
     fw_info      = _node_firmware()
     usb_esps     = _usb_esp_devices()
-    latest_fw    = _latest_firmware_bin()
-    avail_fw_ver = _firmware_bin_version(latest_fw)
+    fw_versions  = _firmware_versions()
+    avail_fw_ver = next(iter(fw_versions.values()), "")
     export_files = _export_files()
     samba_st     = _samba_status()
     diag         = _usb_diag()
@@ -1228,31 +1326,41 @@ def _page(message: str = "", error: bool = False) -> bytes:
             f'<button type="submit">Save</button></form>'
             f'<div class="sub">{auto}</div>'
         )
+        remove_cell = (
+            f'<form method="post" action="/remove_node" style="display:inline"'
+            f' onsubmit="return confirm(\'Remove {n["mac"]}?\')">'
+            f'<input type="hidden" name="mac" value="{n["mac"]}">'
+            f'<button type="submit" class="danger" style="font-size:0.75em"'
+            f' title="Remove node from list">✕</button></form>'
+        )
         edge_rows += (
             f'<tr><td>{name_cell}</td><td class="uri">{n["ip"]}</td>'
             f'<td class="uri">{n["mac"]}</td><td>{kind}</td>'
-            f'<td>{fw_cell}</td><td>{status}</td></tr>'
+            f'<td>{fw_cell}</td><td>{status}</td><td>{remove_cell}</td></tr>'
         )
     if not edge_rows:
-        edge_rows = '<tr><td colspan="6" class="empty">No edge nodes connected.</td></tr>'
+        edge_rows = '<tr><td colspan="7" class="empty">No edge nodes connected.</td></tr>'
 
     # USB-connected ESP32 devices (for flashing)
+    board_options = "".join(
+        f'<option value="{b}">{BOARD_TYPES[b]}</option>' for b in BOARD_TYPES)
     esp_rows = ""
     for esp in usb_esps:
         port = esp["port"]
         if port:
-            fw_avail_cell = f'<span class="uri">{avail_fw_ver}</span>' if avail_fw_ver else '<span class="empty">—</span>'
             esp_rows += (
                 f'<tr><td>{esp["name"]}</td><td class="uri">{port}</td>'
                 f'<td class="uri">{esp["id"]}</td>'
-                f'<td>{fw_avail_cell}</td>'
                 f'<td><form method="post" action="/flash_esp" style="display:inline"'
                 f' onsubmit="return confirm(\'Flash firmware to {port}?\')">'
                 f'<input type="hidden" name="port" value="{port}">'
+                f'<select name="board" style="font-size:0.85em">{board_options}</select> '
                 f'<button type="submit">Flash</button></form></td></tr>'
             )
-    fw_name = latest_fw.name if latest_fw else "none"
-    fw_label = f"{fw_name} (v{avail_fw_ver})" if avail_fw_ver else fw_name
+    fw_label_parts = []
+    for brd, fwv in fw_versions.items():
+        fw_label_parts.append(f'{BOARD_TYPES[brd]}: v{fwv}' if fwv else f'{BOARD_TYPES[brd]}: uploaded')
+    fw_label = ", ".join(fw_label_parts) if fw_label_parts else "none"
 
     # ── export file rows
     export_rows = ""
@@ -1364,20 +1472,19 @@ def _page(message: str = "", error: bool = False) -> bytes:
 
   <section id="tab-nodes" class="tab">
     <table>
-      <tr><th>Name</th><th>IP</th><th>MAC</th><th>Type</th><th>Firmware</th><th>Status</th></tr>
+      <tr><th>Name</th><th>IP</th><th>MAC</th><th>Type</th><th>Firmware</th><th>Status</th><th></th></tr>
       {edge_rows}
     </table>
     <h2>ESP32 Firmware</h2>
-    <p style="font-size:0.85em;color:#888">Current: <code>{fw_label}</code>
-      &nbsp;
-      <form method="post" action="/upload_firmware" enctype="multipart/form-data"
-            style="display:inline">
-        <input type="file" name="firmware" accept=".bin" required style="font-size:0.8em">
-        <button type="submit" style="font-size:0.8em">Upload .bin</button>
-      </form>
-    </p>
+    <p style="font-size:0.85em;color:#888">Available: <code>{fw_label}</code></p>
+    <form method="post" action="/upload_firmware" enctype="multipart/form-data"
+          style="margin-bottom:0.8em">
+      <select name="board" style="font-size:0.85em">{board_options}</select>
+      <input type="file" name="firmware" accept=".bin" required style="font-size:0.8em">
+      <button type="submit" style="font-size:0.8em">Upload .bin</button>
+    </form>
     {'<h3 style="font-size:0.95em;margin-top:0.8em">USB-connected devices</h3>'
-     '<table><tr><th>Device</th><th>Port</th><th>ID</th><th>Firmware</th><th>Action</th></tr>'
+     '<table><tr><th>Device</th><th>Port</th><th>ID</th><th>Action</th></tr>'
      + esp_rows + '</table>' if esp_rows else
      '<p style="font-size:0.85em;color:#888">'
      'No ESP32 connected via USB. Plug one in to flash firmware.</p>'}
@@ -1581,34 +1688,40 @@ class _Handler(BaseHTTPRequestHandler):
                 parts = raw.split(boundary)
                 data = b""
                 filename = ""
+                board = ""
                 for part in parts:
-                    if b'name="firmware"' not in part:
-                        continue
-                    fm = re.search(rb'filename="([^"]+)"', part)
-                    if not fm:
-                        continue
-                    filename = fm.group(1).decode()
-                    hdr_end = part.find(b"\r\n\r\n")
-                    if hdr_end < 0:
-                        continue
-                    data = part[hdr_end + 4:]
-                    if data.endswith(b"\r\n"):
-                        data = data[:-2]
-                    break
+                    if b'name="firmware"' in part:
+                        fm = re.search(rb'filename="([^"]+)"', part)
+                        if not fm:
+                            continue
+                        filename = fm.group(1).decode()
+                        hdr_end = part.find(b"\r\n\r\n")
+                        if hdr_end < 0:
+                            continue
+                        data = part[hdr_end + 4:]
+                        if data.endswith(b"\r\n"):
+                            data = data[:-2]
+                    elif b'name="board"' in part:
+                        hdr_end = part.find(b"\r\n\r\n")
+                        if hdr_end >= 0:
+                            board = part[hdr_end + 4:].strip(b"\r\n ").decode()
                 if not filename:
                     raise ValueError("No file selected")
                 if not filename.endswith(".bin"):
                     raise ValueError("Only .bin firmware files accepted")
                 if len(data) < 1024:
                     raise ValueError("File too small to be firmware")
+                if board not in BOARD_TYPES:
+                    board = DEFAULT_BOARD
                 FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
-                dest = FIRMWARE_DIR / "usb_dongle.bin"
+                dest = FIRMWARE_DIR / f"{board}.bin"
                 tmp = dest.with_suffix(".tmp")
                 tmp.write_bytes(data)
                 tmp.rename(dest)
                 ver = _firmware_bin_version(dest)
                 label = f" (v{ver})" if ver else ""
-                self._send(_page(f"Firmware uploaded: {filename}{label} ({len(data):,} bytes)"))
+                board_label = BOARD_TYPES[board]
+                self._send(_page(f"Firmware uploaded for {board_label}: {filename}{label} ({len(data):,} bytes)"))
             except Exception as exc:
                 self._send(_page(str(exc), error=True))
             return
@@ -1658,6 +1771,11 @@ class _Handler(BaseHTTPRequestHandler):
                 _set_node_name(mac, name)
                 msg = f'Node {mac} named "{name}"' if name.strip() else f"Cleared name for {mac}"
                 self._send(_page(msg))
+
+            elif self.path == "/remove_node":
+                mac = p.get("mac", [""])[0]
+                _remove_node(mac)
+                self._send(_page(f"Removed node {mac}."))
 
             elif self.path == "/send_to_hub":
                 fname = p.get("file", [""])[0]
@@ -1709,9 +1827,10 @@ class _Handler(BaseHTTPRequestHandler):
 
             elif self.path == "/flash_esp":
                 port = p.get("port", [""])[0]
+                board = p.get("board", [""])[0]
                 if not port:
                     raise ValueError("No serial port specified")
-                msg = _flash_esp(port)
+                msg = _flash_esp(port, board)
                 is_err = "failed" in msg.lower() or "error" in msg.lower() or "not found" in msg.lower()
                 self._send(_page(msg, error=is_err))
 
