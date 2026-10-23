@@ -22,8 +22,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-CONFIG_PATH    = "/etc/pacemaker-edge/node.conf"
-CA_CERT        = "/etc/pacemaker-edge/central-ca.crt"
+CONFIG_PATH    = "/etc/cied-edge/node.conf"
+CA_CERT        = "/etc/cied-edge/central-ca.crt"
 POLL_INTERVAL  = 5    # seconds between queue scans when online
 OFFLINE_POLL   = 30   # seconds between connectivity checks when offline
 

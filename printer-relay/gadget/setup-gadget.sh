@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-RELAY_CONF=/etc/pacemaker-relay/relay.conf
-EXPORT_CONF=/etc/pacemaker-export/export.conf
+RELAY_CONF=/etc/cied-relay/relay.conf
+EXPORT_CONF=/etc/cied-export/export.conf
 
 [ -f "$RELAY_CONF" ] || { echo "Missing $RELAY_CONF"; exit 1; }
 # shellcheck source=/dev/null

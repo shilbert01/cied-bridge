@@ -36,7 +36,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Pacemaker Central", docs_url=None, redoc_url=None)
+app = FastAPI(title="CIED Central", docs_url=None, redoc_url=None)
 
 # Loaded at startup from environment (set by systemd unit from server.conf)
 _INGEST_TOKEN: str = ""
@@ -661,7 +661,7 @@ def ca_cert():
     if not cert.exists():
         raise HTTPException(status_code=404, detail="CA cert not found")
     return FileResponse(str(cert), media_type="application/x-x509-ca-cert",
-                        headers={"Content-Disposition": "attachment; filename=PacemakerCentral-CA.crt"})
+                        headers={"Content-Disposition": "attachment; filename=CIEDCentral-CA.crt"})
 
 
 # ---------------------------------------------------------------------------

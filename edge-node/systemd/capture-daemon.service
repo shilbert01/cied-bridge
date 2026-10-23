@@ -1,5 +1,5 @@
 [Unit]
-Description=Pacemaker Print Job Capture Daemon
+Description=CIED Bridge Print Job Capture Daemon
 After=usb-printer-gadget.service
 Requires=usb-printer-gadget.service
 

@@ -3,7 +3,7 @@
 #
 # Creates a hidden WiFi AP (relayap) on wlan0 for the Pi Zero export node to connect to.
 # eth0 stays on the main LAN for management.
-# Samba serves /var/lib/pacemaker-export/import as \\PI3\import for KardiSynch.
+# Samba serves /var/lib/cied-export/import as \\PI3\import for CIED Studio.
 #
 # Subnet:  10.99.0.0/24
 #   Pi3 wlan0:   10.99.0.1
@@ -17,7 +17,7 @@ set -euo pipefail
 # Source the per-clinic manifest + helpers; anything unset defaults to "on" so a
 # box without a manifest behaves like the pre-feature-flag script.
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLINIC_CONF="${CLINIC_CONF:-/etc/pacemaker/clinic.conf}"
+CLINIC_CONF="${CLINIC_CONF:-/etc/cied-bridge/clinic.conf}"
 [ -f "$SELF_DIR/../../tools/feature-lib.sh" ] && . "$SELF_DIR/../../tools/feature-lib.sh"
 [ -f "$CLINIC_CONF" ] && . "$CLINIC_CONF"
 : "${FEATURE_RELAY_AP:=on}"
@@ -37,7 +37,7 @@ AP_DHCP_END=10.99.0.50
 : "${AP_HIDDEN:=off}"
 AP_HIDE=$([ "$(printf %s "$AP_HIDDEN"|tr A-Z a-z)" = on ] && echo 2 || echo 0)
 
-IMPORT_DIR=/var/lib/pacemaker-export/import
+IMPORT_DIR=/var/lib/cied-export/import
 
 apt-get update -qq
 apt-get install -y hostapd dnsmasq samba chrony
@@ -132,12 +132,12 @@ chmod 777 "$IMPORT_DIR"
 cat > /etc/samba/smb.conf << 'EOF'
 [global]
    workgroup = WORKGROUP
-   server string = Pacemaker Export Relay
+   server string = CIED Bridge Export
    log level = 1
    map to guest = bad user
 
 [import]
-   path = /var/lib/pacemaker-export/import
+   path = /var/lib/cied-export/import
    browseable = yes
    read only = no
    guest ok = yes
@@ -158,7 +158,7 @@ IMPORT_HUB_SRC="$SCRIPT_DIR/../../import-relay/pi3-server"
 if feature_enabled FEATURE_IMPORT_HUB && [ -f "$IMPORT_HUB_SRC/import-server.py" ]; then
     install -m 755 "$IMPORT_HUB_SRC/import-server.py"      /usr/local/sbin/
     install -m 644 "$IMPORT_HUB_SRC/import-server.service" /etc/systemd/system/
-    mkdir -p /var/lib/pacemaker-import-hub
+    mkdir -p /var/lib/cied-import-hub
     IMPORT_HUB_INSTALLED=1
 elif feature_enabled FEATURE_IMPORT_HUB; then
     echo "NOTE: FEATURE_IMPORT_HUB=on but import-relay/pi3-server not found — skipping install."

@@ -40,7 +40,7 @@ from pathlib import Path
 
 from hub_client import Hub
 
-CONFIG_PATH = "/etc/pacemaker-import/import.conf"
+CONFIG_PATH = "/etc/cied-import/import.conf"
 MOUNT_TIMEOUT = 15  # seconds
 
 

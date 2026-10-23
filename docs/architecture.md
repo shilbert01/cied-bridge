@@ -24,7 +24,7 @@ Supporting names (not roles):
   service could run elsewhere, including on a hub.
 - **KardiSynch** — the customer's data-file application (its parsers are what the
   extraction service augments/replaces).
-- **pacemaker-central** — the **data hub's** management web UI.
+- **CIED Central** — the **data hub's** management web UI.
 - **CiedOCR** — today's implementation of the **extraction service**.
 
 ---
@@ -71,7 +71,7 @@ are selected by config.
 | Hub role | Attached / workflow | Web UIs it exposes |
 |----------|---------------------|--------------------|
 | `printer` | a physical printer; the print workflow | printer-management UI |
-| `data`    | the file-based workflow | pacemaker-central UI + annotation/training UI |
+| `data`    | the file-based workflow | CIED Central UI + annotation/training UI |
 
 ### Roles are composable, not exclusive
 
@@ -89,14 +89,14 @@ redelivery), and node/relay management. Relays push to (`ingest`) or pull from
 **Added per role:**
 - `printer` → CUPS + the printer + the printer-management UI.
 - `data` → `/ingest-export`, `/data/exports`, the KardiSynch outbox + feeder,
-  the pacemaker-central + annotation/training UIs, and the extraction-service client.
+  the CIED Central + annotation/training UIs, and the extraction-service client.
 
 ### When to combine vs. split
 
 - **Small site → one combined hub.** A clinic that both prints and runs the file
   workflow uses a single box with both roles: one AP, less hardware, simpler.
 - **Larger site → split by role onto separate boxes.** Reasons to split:
-  - **Resource** — the `data` role (pacemaker-central + annotation/training UI,
+  - **Resource** — the `data` role (CIED Central + annotation/training UI,
     non-LLM extraction) is heavier than `printer`; a Pi3 co-hosting both is fine at
     small volume, but at scale give `data` its own (beefier) box.
   - **WiFi coordination** — each hub is its own AP. Two *separate* hubs in the same
@@ -134,7 +134,7 @@ print is not a data file, and KardiSynch consumes only data files.
 ```
 PROGRAMMER  (two USB personalities → two relays, or one composite relay)
 │
-├─ (A) PRINT WORKFLOW ─────────────────────────────► printer hub → Pacemaker Central
+├─ (A) PRINT WORKFLOW ─────────────────────────────► printer hub → CIED Central
 │      relay role = ingest-printer  (ESP32-S3 or Pi Zero W)
 │        · programmer "prints"; relay captures the job
 │        · forwards to the printer hub (queue) over WiFi
@@ -177,7 +177,7 @@ companion), byte-perfect.
 | `import-relay/` | relay · `RELAY_ROLE=delivery-storage` |
 | `kardisynch-receiver/` | relay · `RELAY_ROLE=delivery-hid` |
 | `printer-relay/pi3-server/`, `printer-config-server.py` | hub · `HUB_ROLE=printer` |
-| `central-server/` (pacemaker-central) | hub · `HUB_ROLE=data` |
+| `central-server/` (CIED Central) | hub · `HUB_ROLE=data` |
 | `import-relay/pi3-server/import-server.py` | hub **queue** component (shared) |
 | `import-relay/daemon/hub_client.py` | shared relay↔hub client |
 | CiedOCR @ bigboy | extraction service |

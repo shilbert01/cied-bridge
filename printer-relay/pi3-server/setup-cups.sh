@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pi3 relay hub setup — run as root on fresh Raspberry Pi OS.
+# Relay hub setup — run as root on fresh Raspberry Pi OS or Debian/Ubuntu server.
 #
 # Combined hub: printer relay + data export. Roles are composable via
 # clinic.conf feature flags (all default to on).
@@ -9,21 +9,29 @@
 # If an RT5370 USB adapter is present, udev pins it to wlan_ap for stable naming.
 #
 # Printer role: CUPS raw queue + LPR (port 515) + USB autoconf + watchdog + web UI.
-# Data role:    Samba share (\\PI3\import) + export ingest server + import hub.
+# Data role:    Samba share (\\<host>\import) + export ingest server + import hub.
 #
 # Subnet:  10.99.0.0/24
-#   Pi3 AP iface: 10.99.0.1
+#   Hub AP iface: 10.99.0.1
 #   Relay nodes:  10.99.0.2+ (static or DHCP)
 #
 # AP passphrase is RelayPrint#1 — change in /etc/hostapd/hostapd.conf after setup.
 
 set -euo pipefail
 
+# ── Platform detection ──────────────────────────────────────────────────────
+# Pi-specific sections (dwc2 USB driver, /boot/firmware config, raspi-config)
+# are skipped on non-Pi hardware where they don't apply.
+IS_RPI=false
+if [ -f /proc/device-tree/model ] && grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
+    IS_RPI=true
+fi
+
 # ── Clinic feature manifest ──────────────────────────────────────────────────
 # Source the per-clinic manifest + helpers; anything unset defaults to "on" so a
 # box without a manifest behaves like the pre-feature-flag script.
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLINIC_CONF="${CLINIC_CONF:-/etc/pacemaker/clinic.conf}"
+CLINIC_CONF="${CLINIC_CONF:-/etc/cied-bridge/clinic.conf}"
 [ -f "$SELF_DIR/../../tools/feature-lib.sh" ] && . "$SELF_DIR/../../tools/feature-lib.sh"
 [ -f "$CLINIC_CONF" ] && . "$CLINIC_CONF"
 : "${FEATURE_RELAY_AP:=on}"
@@ -37,14 +45,17 @@ type apply_feature_service >/dev/null 2>&1 || apply_feature_service() { f=$1; sh
 # USB adapter enumeration order is not stable across reboots — wlan0/wlan1 can
 # swap. Pin by MAC so hostapd always gets the right radio.
 _pin_wifi_interfaces() {
-    local rt5370_mac onboard_mac
-    rt5370_mac=$(ip -o link | awk '/148f:5370|rt2800usb/ || /phy#/{next} /link\/ether/{print $0}' | head -1)
-    # Find RT5370 by its USB vendor:product in the sysfs path
-    for dev in /sys/class/net/wlan*; do
+    local rt5370_mac="" onboard_mac="" usb_mac="" usb_name=""
+    # Find RT5370 by its USB vendor:product in the sysfs path (Pi3 + RT5370 combo)
+    # wlan* = Pi/classic naming; wlp* = x86 predictable naming
+    for dev in /sys/class/net/wlan* /sys/class/net/wlp*; do
         [ -e "$dev/device" ] || continue
         local usbdev=$(readlink -f "$dev/device" 2>/dev/null)
         if echo "$usbdev" | grep -q "148f.*5370" 2>/dev/null; then
             rt5370_mac=$(cat "$dev/address" 2>/dev/null)
+        elif echo "$usbdev" | grep -q "/usb" 2>/dev/null; then
+            usb_mac=$(cat "$dev/address" 2>/dev/null)
+            usb_name=$(basename "$dev")
         else
             onboard_mac=$(cat "$dev/address" 2>/dev/null)
         fi
@@ -55,11 +66,26 @@ _pin_wifi_interfaces() {
 SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="$rt5370_mac", NAME="wlan_ap"
 ${onboard_mac:+SUBSYSTEM==\"net\", ACTION==\"add\", ATTR{address}==\"$onboard_mac\", NAME=\"wlan_int\"}
 EOF
-        echo "   udev: RT5370 ($rt5370_mac) -> wlan_ap${onboard_mac:+, onboard ($onboard_mac) -> wlan_int}"
+        echo "   udev: RT5370 ($rt5370_mac) -> wlan_ap${onboard_mac:+, onboard ($onboard_mac) -> wlan_int}" >&2
+        echo "wlan_ap"
+    elif [ -n "$usb_mac" ]; then
+        # Non-Pi server with a USB WiFi adapter — pin it for stable naming
+        local rules=/etc/udev/rules.d/70-wifi-names.rules
+        cat > "$rules" << EOF
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="$usb_mac", NAME="wlan_ap"
+EOF
+        echo "   udev: USB WiFi ($usb_mac, was $usb_name) -> wlan_ap" >&2
         echo "wlan_ap"
     else
-        echo "   no RT5370 found, using wlan0" >&2
-        echo "wlan0"
+        # Single wireless interface (onboard or PCI) — use it as-is
+        local first=$(ls -1d /sys/class/net/wlan* /sys/class/net/wlp* 2>/dev/null | head -1)
+        if [ -n "$first" ]; then
+            echo "   using $(basename "$first") (only wireless interface)" >&2
+            basename "$first"
+        else
+            echo "   WARNING: no wireless interface found" >&2
+            echo "wlan0"
+        fi
     fi
 }
 
@@ -77,16 +103,23 @@ AP_DHCP_END=10.99.0.50
 AP_HIDE=$([ "$(printf %s "$AP_HIDDEN"|tr A-Z a-z)" = on ] && echo 2 || echo 0)
 
 apt-get update -qq
-apt-get install -y hostapd dnsmasq cups cups-bsd iptables chrony sshpass rfkill samba ipp-usb
+PACKAGES="hostapd dnsmasq cups cups-bsd iptables chrony sshpass rfkill samba ipp-usb"
+if ! $IS_RPI; then
+    # x86/server: ghostscript provides 'gs' for PCL→PDF conversion (the Python
+    # code tries gpcl6, pcl6, gs in order). wireless-tools for iwconfig if needed.
+    PACKAGES="$PACKAGES ghostscript wireless-tools"
+fi
+apt-get install -y $PACKAGES
 
 # ── Stop services while reconfiguring ────────────────────────────────────────
 systemctl stop hostapd dnsmasq 2>/dev/null || true
 
-# Fresh Raspberry Pi OS soft-blocks Wi-Fi until a regulatory country is set;
-# without this, `ip link set wlan0 up` and hostapd fail with
-# "Operation not possible due to RF-kill". Set the country, then clear the block.
-raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null \
-    || iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+# Set the WiFi regulatory country — without this, hostapd may fail with
+# "Operation not possible due to RF-kill".
+if $IS_RPI; then
+    raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null || true
+fi
+iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
 rfkill unblock wifi 2>/dev/null || rfkill unblock wlan 2>/dev/null || true
 
 # ── Prevent NetworkManager / wpa_supplicant from touching the AP interface ───
@@ -133,17 +166,10 @@ ip link set "$AP_IFACE" up 2>/dev/null || true
 # and almost never got an IP (a broadcast AP joined first try). The Pi Zero's
 # wpa_supplicant (scan_ssid=1) coped, which masked this. Un-hidden = Pico works.
 #
-# WPA2-PSK only. WPA3-SAE was attempted here (wpa_key_mgmt="WPA-PSK SAE" +
-# ieee80211w=1 + sae_require_mfp=1) but the Pi3's Broadcom brcmfmac chip CANNOT
-# host SAE/PMF in AP mode — hostapd dies at startup with
-#   nl80211: kernel reports: key setting validation failed
-#   wlan0: Could not connect to kernel driver / Unable to setup interface
-# taking the whole AP down (2026-07-26). The driver rejects the 802.11w group-
-# mgmt (BIP) key setup. SAE works on the CLIENT side (Pico/ESP32/Pi Zero), but
-# the AP is the limiter and this AP is brcmfmac, so the fleet stays WPA2-PSK.
-# Do NOT re-add SAE/ieee80211w here unless the Pi3's WLAN chip/driver changes.
-# For stronger per-site security use a wpa_supplicant EAP-TLS client + a separate
-# RADIUS-capable AP (not this Pi3's brcmfmac).
+# WPA2-PSK only. WPA3-SAE was attempted but the Pi3's Broadcom brcmfmac chip
+# cannot host SAE/PMF in AP mode (nl80211 key validation fails, 2026-07-26).
+# Non-Pi servers MAY support SAE if the WiFi chipset's driver handles 802.11w,
+# but we keep WPA2-PSK for relay compatibility (ESP32/Pico clients don't need SAE).
 cat > /etc/hostapd/hostapd.conf << EOF
 interface=${AP_IFACE}
 driver=nl80211
@@ -195,29 +221,31 @@ bind-dynamic
 dhcp-range=${AP_DHCP_START},${AP_DHCP_END},12h
 EOF
 
-# ── USB driver: dwc2 replaces dwc_otg ───────────────────────────────────────
+# ── USB driver: dwc2 replaces dwc_otg (Pi only) ────────────────────────────
 # dwc_otg's FIQ FSM only handles split transactions — non-split bulk OUT hangs
 # on NAK storms between consecutive print jobs. dwc2 is the mainline driver for
 # the same hardware and retries properly at USB 2.0 high speed.
-BOOT_CONFIG="/boot/firmware/config.txt"
-if [ -f "$BOOT_CONFIG" ]; then
-    if ! grep -q "dtoverlay=dwc2" "$BOOT_CONFIG"; then
-        cp "$BOOT_CONFIG" "${BOOT_CONFIG}.pre-dwc2"
-        # Add under [all] section if it exists, otherwise append
-        if grep -q '^\[all\]' "$BOOT_CONFIG"; then
-            sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=host' "$BOOT_CONFIG"
-        else
-            printf '\n[all]\ndtoverlay=dwc2,dr_mode=host\n' >> "$BOOT_CONFIG"
+# Non-Pi servers use standard XHCI USB — none of this applies.
+if $IS_RPI; then
+    BOOT_CONFIG="/boot/firmware/config.txt"
+    if [ -f "$BOOT_CONFIG" ]; then
+        if ! grep -q "dtoverlay=dwc2" "$BOOT_CONFIG"; then
+            cp "$BOOT_CONFIG" "${BOOT_CONFIG}.pre-dwc2"
+            if grep -q '^\[all\]' "$BOOT_CONFIG"; then
+                sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=host' "$BOOT_CONFIG"
+            else
+                printf '\n[all]\ndtoverlay=dwc2,dr_mode=host\n' >> "$BOOT_CONFIG"
+            fi
+            echo "Added dtoverlay=dwc2,dr_mode=host to $BOOT_CONFIG (reboot required)"
+            NEEDS_REBOOT=1
         fi
-        echo "Added dtoverlay=dwc2,dr_mode=host to $BOOT_CONFIG (reboot required)"
-        NEEDS_REBOOT=1
     fi
-fi
-BOOT_CMDLINE="/boot/firmware/cmdline.txt"
-if [ -f "$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "$BOOT_CMDLINE"; then
-    cp "$BOOT_CMDLINE" "${BOOT_CMDLINE}.pre-dwc2"
-    sed -i 's/ *dwc_otg\.speed=[0-9]*//' "$BOOT_CMDLINE"
-    echo "Removed dwc_otg.speed from $BOOT_CMDLINE"
+    BOOT_CMDLINE="/boot/firmware/cmdline.txt"
+    if [ -f "$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "$BOOT_CMDLINE"; then
+        cp "$BOOT_CMDLINE" "${BOOT_CMDLINE}.pre-dwc2"
+        sed -i 's/ *dwc_otg\.speed=[0-9]*//' "$BOOT_CMDLINE"
+        echo "Removed dwc_otg.speed from $BOOT_CMDLINE"
+    fi
 fi
 
 # ── CUPS + ipp-usb ──────────────────────────────────────────────────────────
@@ -343,19 +371,19 @@ systemctl enable --now relay-print-watchdog.timer
 # When FEATURE_SAMBA_SHARE is on, files deposited via the export relay appear
 # in \\PI3\import for KardiSynch to consume. Uses a separate directory from
 # /data/pdf (whose watcher deletes imports).
-IMPORT_DIR=/var/lib/pacemaker-export/import
+IMPORT_DIR=/var/lib/cied-export/import
 mkdir -p "$IMPORT_DIR"
 chmod 777 "$IMPORT_DIR"
 
 cat > /etc/samba/smb.conf << 'EOF'
 [global]
    workgroup = WORKGROUP
-   server string = Pacemaker Relay Hub
+   server string = CIED Hub
    log level = 1
    map to guest = bad user
 
 [import]
-   path = /var/lib/pacemaker-export/import
+   path = /var/lib/cied-export/import
    browseable = yes
    read only = no
    guest ok = yes
@@ -376,7 +404,7 @@ IMPORT_HUB_INSTALLED=0
 if feature_enabled FEATURE_IMPORT_HUB && [ -f "$IMPORT_HUB_SRC/import-server.py" ]; then
     install -m 755 "$IMPORT_HUB_SRC/import-server.py"      /usr/local/sbin/
     install -m 644 "$IMPORT_HUB_SRC/import-server.service" /etc/systemd/system/
-    mkdir -p /var/lib/pacemaker-import-hub
+    mkdir -p /var/lib/cied-import-hub
     IMPORT_HUB_INSTALLED=1
 elif feature_enabled FEATURE_IMPORT_HUB; then
     echo "NOTE: FEATURE_IMPORT_HUB=on but import-relay/pi3-server not found — skipping."
@@ -407,7 +435,13 @@ else
     systemctl disable --now import-server 2>/dev/null || true
 fi
 
-usermod -aG lpadmin pi 2>/dev/null || true
+# Add the default user to lpadmin so they can manage CUPS
+if $IS_RPI; then
+    usermod -aG lpadmin pi 2>/dev/null || true
+else
+    SUDO_USER="${SUDO_USER:-}"
+    [ -n "$SUDO_USER" ] && usermod -aG lpadmin "$SUDO_USER" 2>/dev/null || true
+fi
 
 # ── LaserPrinter queue — via ipp-usb ─────────────────────────────────────────
 # ipp-usb exposes the printer as ipp://localhost:60000/ipp/print.
@@ -427,10 +461,14 @@ else
     echo "LaserPrinter queue created: $IPP_URI (IPP Everywhere)."
 fi
 
+PLATFORM=$($IS_RPI && echo "Raspberry Pi" || echo "$(uname -m) server")
 echo ""
+echo "Platform: $PLATFORM ($(hostname))"
 echo "Relay AP:  ssid=${AP_SSID} $([ "$AP_HIDE" = 2 ] && echo '(hidden)' || echo '(broadcast)')  passphrase=${AP_PASS}"
-echo "Pi3 ${AP_IFACE}: ${AP_IP}"
-echo "Pi3 eth0:  $(ip -4 addr show eth0 2>/dev/null | awk '/inet /{print $2}' || echo 'check manually')"
+echo "Hub ${AP_IFACE}: ${AP_IP}"
+LAN_IFACE=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+LAN_IFACE="${LAN_IFACE:-eth0}"
+echo "LAN ($LAN_IFACE):  $(ip -4 addr show "$LAN_IFACE" 2>/dev/null | awk '/inet /{print $2}' || echo 'check manually')"
 echo ""
 echo "Features:"
 echo "  RELAY_AP=$FEATURE_RELAY_AP  PRINTER_WEBUI=$FEATURE_PRINTER_WEBUI"
@@ -442,7 +480,9 @@ if [ "$IMPORT_HUB_INSTALLED" = "1" ]; then
     echo "  Import hub: http://${AP_IP}:8090/"
 fi
 echo ""
-echo "USB driver: dwc2 (mainline, handles NAK retries correctly)"
+if $IS_RPI; then
+    echo "USB driver: dwc2 (mainline, handles NAK retries correctly)"
+fi
 echo "Printer backend: ipp-usb (IPP-over-USB, protocol 4)"
 echo "Test: plug in a USB printer, then check: lpstat -v LaserPrinter"
 if [ "${NEEDS_REBOOT:-0}" = "1" ]; then

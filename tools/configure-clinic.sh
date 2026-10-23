@@ -1,8 +1,8 @@
 #!/bin/bash
-# configure-clinic.sh — write the per-clinic feature manifest (/etc/pacemaker/clinic.conf).
+# configure-clinic.sh — write the per-clinic feature manifest (/etc/cied-bridge/clinic.conf).
 #
 # Interactive wizard by default; flags for non-interactive / redeploy use
-# (e.g. clinic-pi3-redeploy.sh). Existing values are preserved: the current
+# (e.g. clinic-hub-redeploy.sh). Existing values are preserved: the current
 # manifest is loaded first, flags override, then the wizard prompts using the
 # current value as the default.
 #
@@ -12,7 +12,7 @@
 #   sudo tools/configure-clinic.sh --out=./clinic.conf   # write elsewhere (testing)
 set -euo pipefail
 
-OUT="${CLINIC_CONF:-/etc/pacemaker/clinic.conf}"
+OUT="${CLINIC_CONF:-/etc/cied-bridge/clinic.conf}"
 INTERACTIVE=1
 
 # ── defaults (overridden by existing manifest, then flags, then prompts) ──────
@@ -81,14 +81,14 @@ if [ "$INTERACTIVE" = 1 ]; then
         [ -n "$a" ] && eval "$var=\$a"
     }
 
-    echo "== Pacemaker clinic configuration =="
+    echo "== CIED Bridge clinic configuration =="
     ask_value  CLINIC_NAME           "Clinic name"
     echo "-- Features --"
     ask_toggle FEATURE_RELAY_AP      "Relay AP (WiFi subnet the nodes join)"
     ask_toggle FEATURE_SAMBA_SHARE   "Samba export share"
     ask_toggle FEATURE_IMPORT_HUB    "Import hub (USB presenter drive)"
     ask_toggle FEATURE_PRINTER_WEBUI "Printer web interface"
-    ask_toggle FEATURE_CENTRAL_WEBUI "Pacemaker-central web UI (Pi4)"
+    ask_toggle FEATURE_CENTRAL_WEBUI "CIED Central web UI (Pi4)"
     if [ "$FEATURE_RELAY_AP" = on ]; then
         echo "-- Relay AP settings --"
         ask_value  AP_SSID  "AP SSID"
@@ -101,7 +101,7 @@ umask 077
 mkdir -p "$(dirname "$OUT")"
 tmp="$(mktemp "${OUT}.XXXXXX")"
 cat > "$tmp" <<EOF
-# Pacemaker clinic feature manifest — written by configure-clinic.sh $(date -u +%FT%TZ)
+# CIED Bridge clinic feature manifest — written by configure-clinic.sh $(date -u +%FT%TZ)
 CLINIC_NAME="$CLINIC_NAME"
 
 # Relay subnet / AP

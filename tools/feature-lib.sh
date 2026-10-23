@@ -1,7 +1,7 @@
 #!/bin/sh
 # feature-lib.sh — sourceable helpers for the per-clinic feature manifest.
 #
-# The manifest (/etc/pacemaker/clinic.conf, written by configure-clinic.sh) is a
+# The manifest (/etc/cied-bridge/clinic.conf, written by configure-clinic.sh) is a
 # plain KEY=value file of FEATURE_* toggles plus shared identity (AP creds etc.).
 # Box setup scripts source it, default-fill anything unset to "on" (so a box with
 # no manifest behaves like the pre-feature-flag scripts did), then use these
@@ -9,7 +9,7 @@
 #
 # POSIX sh — works under dash/BusyBox on the Pi3 and Buildroot nodes.
 
-CLINIC_CONF="${CLINIC_CONF:-/etc/pacemaker/clinic.conf}"
+CLINIC_CONF="${CLINIC_CONF:-/etc/cied-bridge/clinic.conf}"
 
 # load_clinic_conf: source the manifest if present. Returns 0 if loaded, 1 if not.
 load_clinic_conf() {

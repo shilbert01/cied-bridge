@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "==> Installing pacemaker central server (Docker)"
+echo "==> Installing CIED Central server (Docker)"
 
 # 1. Docker (official install for arm64/Raspberry Pi OS)
 if ! command -v docker &>/dev/null; then
@@ -24,7 +24,7 @@ systemctl daemon-reload
 systemctl enable bt-pan.service
 
 # 4. Deploy compose project
-APP_DIR=/opt/pacemaker-central
+APP_DIR=/opt/cied-central
 install -d -m 750 "$APP_DIR"
 cp "$SCRIPT_DIR/compose.yaml"    "$APP_DIR/"
 cp "$SCRIPT_DIR/Dockerfile"      "$APP_DIR/"
@@ -40,13 +40,13 @@ fi
 # 5. Systemd unit to manage the Docker Compose stack
 cat > /etc/systemd/system/central-api.service <<'EOF'
 [Unit]
-Description=Pacemaker Central API (Docker Compose)
+Description=CIED Central API (Docker Compose)
 After=docker.service network-online.target
 Requires=docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/pacemaker-central
+WorkingDirectory=/opt/cied-central
 ExecStart=docker compose up --build
 ExecStop=docker compose down
 Restart=always
@@ -65,6 +65,6 @@ echo "    1. Edit $APP_DIR/.env  — set INGEST_TOKEN (must match edge nodes)"
 echo "    2. sudo systemctl start bt-pan central-api"
 echo "    3. Wait for first-run cert generation, then:"
 echo "       docker compose -f $APP_DIR/compose.yaml cp api:/certs/server.crt /tmp/"
-echo "       Copy /tmp/server.crt to each edge node at /etc/pacemaker-edge/central-ca.crt"
+echo "       Copy /tmp/server.crt to each edge node at /etc/cied-edge/central-ca.crt"
 echo "    4. Check logs: journalctl -fu central-api"
 echo "                   docker compose -C $APP_DIR logs -f"

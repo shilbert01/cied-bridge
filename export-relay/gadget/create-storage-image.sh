@@ -5,12 +5,12 @@
 # Run once at initial setup. The image is re-used across reboots.
 set -eu
 
-CONF=/etc/pacemaker-export/export.conf
+CONF=/etc/cied-export/export.conf
 [ -f "$CONF" ] || { echo "Missing $CONF"; exit 1; }
 # shellcheck source=/dev/null
 . "$CONF"
 
-IMG="${DISK_IMAGE:-/var/lib/pacemaker-export/disk.img}"
+IMG="${DISK_IMAGE:-/var/lib/cied-export/disk.img}"
 SIZE_MB="${DISK_SIZE_MB:-256}"
 
 if [ -f "$IMG" ]; then
@@ -54,7 +54,7 @@ PYEOF
 PART_OFFSET=$((2048 * 512))
 LOOP=$(losetup -f)
 losetup -o "$PART_OFFSET" "$LOOP" "$IMG"
-mkdosfs -F 32 -n PACEMAKER "$LOOP"
+mkdosfs -F 32 -n CIED "$LOOP"
 losetup -d "$LOOP"
 
 echo "Done: $IMG (${SIZE_MB}MB, MBR + FAT32 on partition 1)"

@@ -18,7 +18,7 @@ if [[ ! -f "$CERT_DIR/server.crt" ]]; then
     openssl req -x509 -newkey rsa:4096 -days 3650 -nodes \
         -keyout "$CERT_DIR/server.key" \
         -out    "$CERT_DIR/server.crt" \
-        -subj   "/CN=pacemaker-central" \
+        -subj   "/CN=cied-central" \
         -addext "subjectAltName=$SANS"
     chmod 600 "$CERT_DIR/server.key"
     echo "==> Cert generated. Copy $CERT_DIR/server.crt to edge nodes as trusted CA."

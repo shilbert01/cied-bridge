@@ -1,7 +1,7 @@
 services:
   api:
     build: .
-    image: pacemaker-central:latest
+    image: cied-central:latest
     restart: unless-stopped
     env_file: .env
     ports:

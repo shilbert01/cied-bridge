@@ -1,4 +1,4 @@
-# Pacemaker Print Capture — Architecture & Pipeline
+# CIED Bridge — Architecture & Pipeline
 
 ## Overview
 
@@ -139,7 +139,7 @@ Interrogation Device
 └───────────────────────┬───────────────────────────────┘
                         │  atomic rename (partial → .ps)
                         ▼
-              /var/lib/pacemaker-edge/queue/
+              /var/lib/cied-edge/queue/
               <node>_<timestamp>_<uuid>.ps
                         │
                         │  poll every 5s
@@ -157,7 +157,7 @@ Interrogation Device
 └───────────────────────┬───────────────────────────────┘
                         │  HTTP 202 Accepted → move to sent/
                         ▼
-              /var/lib/pacemaker-edge/sent/
+              /var/lib/cied-edge/sent/
               (kept for audit; not deleted automatically)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ network boundary ━━━━━━━━━━━━━━━━━━━━━━━
@@ -266,7 +266,7 @@ devices (
 | Edge → Central (ingest) | HTTPS with self-signed TLS; Bearer token in `Authorization` header |
 | Central → Tablet (API) | No auth — tablet connects over Bluetooth PAN, a trusted private link |
 | TLS certificates | Self-signed CA; CA cert distributed to edge nodes for verification |
-| Secrets | `INGEST_TOKEN` in Docker environment, `CENTRAL_TOKEN` in `/etc/pacemaker-edge/node.conf` (root-readable only) |
+| Secrets | `INGEST_TOKEN` in Docker environment, `CENTRAL_TOKEN` in `/etc/cied-edge/node.conf` (root-readable only) |
 
 ---
 

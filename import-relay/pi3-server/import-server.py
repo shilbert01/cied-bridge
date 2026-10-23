@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-QUEUE_ROOT = Path(os.environ.get("IMPORT_QUEUE_ROOT", "/var/lib/pacemaker-import-hub"))
+QUEUE_ROOT = Path(os.environ.get("IMPORT_QUEUE_ROOT", "/var/lib/cied-import-hub"))
 LISTEN_HOST = os.environ.get("IMPORT_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("IMPORT_LISTEN_PORT", "8090"))
 LEASE_SECS = int(os.environ.get("IMPORT_LEASE_SECS", "120"))  # requeue if unacked

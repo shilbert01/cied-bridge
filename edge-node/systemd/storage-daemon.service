@@ -1,6 +1,6 @@
 [Unit]
-Description=Pacemaker Edge Storage Daemon
-Documentation=https://github.com/your-org/pacemaker-bridge
+Description=CIED Bridge Edge Storage Daemon
+Documentation=https://github.com/your-org/cied-bridge
 After=usb-printer-gadget.service
 Requires=usb-printer-gadget.service
 
@@ -11,7 +11,7 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=pacemaker-storage
+SyslogIdentifier=cied-storage
 
 # Needs root to loop-mount the backing image
 User=root

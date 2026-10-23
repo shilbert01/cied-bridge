@@ -4,7 +4,7 @@
 # Run once at boot by bt-pan.service.
 set -euo pipefail
 
-CONF=/etc/pacemaker-central/server.conf
+CONF=/etc/cied-central/server.conf
 [[ -f "$CONF" ]] && source "$CONF"
 
 BT_PAN_IP="${BT_PAN_IP:-10.44.0.1}"

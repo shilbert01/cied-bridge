@@ -24,11 +24,11 @@ import shutil
 import tempfile
 from pathlib import Path
 
-CONFIG_PATH   = "/etc/pacemaker-edge/node.conf"
+CONFIG_PATH   = "/etc/cied-edge/node.conf"
 POLL_INTERVAL = 3      # seconds between mtime checks
 IDLE_TIMEOUT  = 15     # seconds of stable mtime before assuming host is done
 MOUNT_TIMEOUT = 10     # seconds to wait for loop mount
-SEEN_DB       = "/var/lib/pacemaker-edge/seen_exports.txt"
+SEEN_DB       = "/var/lib/cied-edge/seen_exports.txt"
 
 # File extensions we forward; everything else is silently ignored
 EXPORT_EXTENSIONS = {".hl7", ".log", ".pdf", ".xml", ".cfg", ".txt"}
@@ -172,7 +172,7 @@ def main():
 
     conf       = load_config(CONFIG_PATH)
     img_path   = conf.get("STORAGE_IMG", "")
-    export_dir = Path(conf.get("EXPORT_DIR", "/var/lib/pacemaker-edge/exports"))
+    export_dir = Path(conf.get("EXPORT_DIR", "/var/lib/cied-edge/exports"))
 
     if not img_path:
         logging.error("STORAGE_IMG not set in %s — storage daemon exiting", CONFIG_PATH)

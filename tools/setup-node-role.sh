@@ -3,7 +3,7 @@
 #
 # Enables the chosen role's gadget + daemon units and DISABLES every other role's
 # units (active teardown), so one node image can be repurposed by config instead
-# of being reflashed. Reads NODE_ROLE from /etc/pacemaker/node-role.conf, or pass
+# of being reflashed. Reads NODE_ROLE from /etc/cied-bridge/node-role.conf, or pass
 # --role=<role> to set + persist it.
 #
 #   sudo tools/setup-node-role.sh                     # apply role from config
@@ -14,7 +14,7 @@
 # their role at image-build time and are rejected here.
 set -euo pipefail
 
-ROLE_CONF="${NODE_ROLE_CONF:-/etc/pacemaker/node-role.conf}"
+ROLE_CONF="${NODE_ROLE_CONF:-/etc/cied-bridge/node-role.conf}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DO_INSTALL=0
 ROLE=""
@@ -38,9 +38,9 @@ install_role() {
             ;;
         import)
             local S="$REPO_DIR/import-relay"
-            install -d -m 750 /etc/pacemaker-import
-            [ -f /etc/pacemaker-import/import.conf ] || \
-                install -m 640 "$S/config/import.conf.example" /etc/pacemaker-import/import.conf
+            install -d -m 750 /etc/cied-import
+            [ -f /etc/cied-import/import.conf ] || \
+                install -m 640 "$S/config/import.conf.example" /etc/cied-import/import.conf
             install -m 755 "$S/gadget/create-storage-image.sh" /usr/local/sbin/
             install -m 755 "$S/gadget/setup-gadget.sh"         /usr/local/sbin/setup-gadget-import.sh
             install -m 755 "$S/daemon/import_daemon.py"        /usr/local/sbin/

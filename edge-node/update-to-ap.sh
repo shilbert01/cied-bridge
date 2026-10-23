@@ -1,11 +1,11 @@
 #!/bin/bash
-# Run on an edge node as root to switch it to the PacemakerCentral WiFi AP.
+# Run on an edge node as root to switch it to the CIEDCentral WiFi AP.
 # Usage: sudo bash update-to-ap.sh
 set -euo pipefail
 
-CONF=/etc/pacemaker-edge/node.conf
-CA_DEST=/etc/pacemaker-edge/central-ca.crt
-AP_SSID="PacemakerCentral"
+CONF=/etc/cied-edge/node.conf
+CA_DEST=/etc/cied-edge/central-ca.crt
+AP_SSID="CIEDCentral"
 AP_PASS="CardioLink#26"
 AP_IP="10.42.0.1"
 

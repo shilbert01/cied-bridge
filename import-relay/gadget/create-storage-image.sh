@@ -8,12 +8,12 @@
 # only the config path and default image location differ.
 set -eu
 
-CONF=/etc/pacemaker-import/import.conf
+CONF=/etc/cied-import/import.conf
 [ -f "$CONF" ] || { echo "Missing $CONF"; exit 1; }
 # shellcheck source=/dev/null
 . "$CONF"
 
-IMG="${DISK_IMAGE:-/var/lib/pacemaker-import/disk.img}"
+IMG="${DISK_IMAGE:-/var/lib/cied-import/disk.img}"
 SIZE_MB="${DISK_SIZE_MB:-256}"
 
 if [ -f "$IMG" ]; then

@@ -25,7 +25,7 @@ mass-storage` enables the import-relay units (`usb-import-gadget`,
    ships alongside `import_daemon.py`):
    ```sh
    cd ../../import-relay
-   install -m600 config/import.conf.example      /etc/pacemaker-import/import.conf  # then edit
+   install -m600 config/import.conf.example      /etc/cied-import/import.conf  # then edit
    install -m755 gadget/create-storage-image.sh  /usr/local/sbin/
    install -m755 gadget/setup-gadget.sh          /usr/local/sbin/setup-gadget-import.sh
    install -m755 daemon/import_daemon.py          /usr/local/sbin/

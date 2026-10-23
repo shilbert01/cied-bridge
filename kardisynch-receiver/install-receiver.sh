@@ -49,7 +49,7 @@ for c in "$SRC_DIR/../import-relay/daemon/hub_client.py" "$SRC_DIR/hub_client.py
     [ -f "$c" ] && { HUB_CLIENT="$c"; break; }
 done
 [ -n "$HUB_CLIENT" ] || die "hub_client.py not found. Copy the import-relay dir too, e.g.:
-    rsync -a pacemaker-bridge/{kardisynch-receiver,import-relay} pi@<this-host>:~/"
+    rsync -a cied-bridge/{kardisynch-receiver,import-relay} pi@<this-host>:~/"
 
 # Where does Raspberry Pi OS keep the boot config? (Bookworm moved it.)
 if [ -d /boot/firmware ]; then BOOT=/boot/firmware; else BOOT=/boot; fi

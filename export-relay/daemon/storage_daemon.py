@@ -26,7 +26,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-CONFIG_PATH   = "/etc/pacemaker-export/export.conf"
+CONFIG_PATH   = "/etc/cied-export/export.conf"
 POLL_INTERVAL = 3      # seconds between mtime checks
 IDLE_TIMEOUT  = 15     # seconds of stable mtime before assuming host is done
 MOUNT_TIMEOUT = 10     # seconds to wait for loop mount
@@ -161,7 +161,7 @@ def _post_file(file_path: Path, server_host: str, timeout: int = 30) -> bool:
 UPLOAD_SENTINEL    = "/var/run/uploading"
 RECEIVE_SENTINEL   = "/var/run/receiving"
 DISPLAY_PID_FILE   = "/var/run/display_daemon.pid"
-FORWARD_COUNT_FILE = "/var/lib/pacemaker-export/forward_count.txt"
+FORWARD_COUNT_FILE = "/var/lib/cied-export/forward_count.txt"
 
 
 def _notify_display(sig):
@@ -302,8 +302,8 @@ def main():
 
     conf        = load_config(CONFIG_PATH)
     img_path    = conf.get("DISK_IMAGE", "")
-    export_dir  = Path(conf.get("EXPORT_DIR", "/var/lib/pacemaker-export/exports"))
-    seen_db     = conf.get("SEEN_DB", "/var/lib/pacemaker-export/seen_exports.txt")
+    export_dir  = Path(conf.get("EXPORT_DIR", "/var/lib/cied-export/exports"))
+    seen_db     = conf.get("SEEN_DB", "/var/lib/cied-export/seen_exports.txt")
     server_host = conf.get("EXPORT_SERVER_HOST", "10.99.0.1")
     giveup_secs = int(conf.get("GIVEUP_SECS", "300"))
 

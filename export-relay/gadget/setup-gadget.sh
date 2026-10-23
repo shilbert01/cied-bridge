@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-CONF=/etc/pacemaker-export/export.conf
+CONF=/etc/cied-export/export.conf
 [ -f "$CONF" ] || { echo "Missing $CONF"; exit 1; }
 # shellcheck source=/dev/null
 . "$CONF"

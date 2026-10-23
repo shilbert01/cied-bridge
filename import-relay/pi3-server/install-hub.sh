@@ -8,12 +8,12 @@
 # Installs import-server.py + its systemd unit and enables it. Idempotent.
 #
 # Config (env-overridable): PORT (8090), LEASE_SECS (120),
-#     QUEUE_ROOT (/var/lib/pacemaker-import-hub)
+#     QUEUE_ROOT (/var/lib/cied-import-hub)
 set -euo pipefail
 
 PORT="${PORT:-8090}"
 LEASE_SECS="${LEASE_SECS:-120}"
-QUEUE_ROOT="${QUEUE_ROOT:-/var/lib/pacemaker-import-hub}"
+QUEUE_ROOT="${QUEUE_ROOT:-/var/lib/cied-import-hub}"
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # import-relay/pi3-server/
 

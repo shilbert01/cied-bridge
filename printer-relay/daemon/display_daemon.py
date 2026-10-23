@@ -340,9 +340,9 @@ def _boot_splash(oled, hold_s=2.0):
 
 # ── Status gathering ──────────────────────────────────────────────────────────
 
-CONFIG_PATH     = "/etc/pacemaker-relay/relay.conf"
-QUEUE_DIR       = "/var/lib/pacemaker-relay/queue"
-SENT_DIR        = "/var/lib/pacemaker-relay/sent"
+CONFIG_PATH     = "/etc/cied-relay/relay.conf"
+QUEUE_DIR       = "/var/lib/cied-relay/queue"
+SENT_DIR        = "/var/lib/cied-relay/sent"
 PRINT_FLAG      = "/var/run/relay_printing"
 PRINT_SHOW_SECS = 10
 

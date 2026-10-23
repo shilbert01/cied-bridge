@@ -1,6 +1,6 @@
 {
-  "name": "Pacemaker Central",
-  "short_name": "PM Central",
+  "name": "CIED Central",
+  "short_name": "CIED Central",
   "start_url": "/ui/",
   "display": "standalone",
   "background_color": "#ffffff",

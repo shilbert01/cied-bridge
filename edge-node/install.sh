@@ -4,13 +4,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "==> Installing pacemaker edge node"
+echo "==> Installing CIED Bridge edge node"
 
 # 1. Node config
-install -d -m 750 /etc/pacemaker-edge
-if [[ ! -f /etc/pacemaker-edge/node.conf ]]; then
-    install -m 640 "$SCRIPT_DIR/config/node.conf.example" /etc/pacemaker-edge/node.conf
-    echo "    CREATED /etc/pacemaker-edge/node.conf — edit before rebooting!"
+install -d -m 750 /etc/cied-edge
+if [[ ! -f /etc/cied-edge/node.conf ]]; then
+    install -m 640 "$SCRIPT_DIR/config/node.conf.example" /etc/cied-edge/node.conf
+    echo "    CREATED /etc/cied-edge/node.conf — edit before rebooting!"
 fi
 
 # 2. Kernel module autoload
@@ -65,13 +65,13 @@ systemctl daemon-reload
 systemctl enable usb-printer-gadget.service capture-daemon.service forwarder.service storage-daemon.service
 
 # 8. Data directories
-install -d -m 750 /var/lib/pacemaker-edge/queue
-install -d -m 750 /var/lib/pacemaker-edge/sent
-install -d -m 750 /var/lib/pacemaker-edge/exports
+install -d -m 750 /var/lib/cied-edge/queue
+install -d -m 750 /var/lib/cied-edge/sent
+install -d -m 750 /var/lib/cied-edge/exports
 
 echo ""
 echo "==> Done. Next steps:"
-echo "    1. Edit /etc/pacemaker-edge/node.conf (set NODE_ID, VENDOR, CENTRAL_URL, CENTRAL_TOKEN,"
+echo "    1. Edit /etc/cied-edge/node.conf (set NODE_ID, VENDOR, CENTRAL_URL, CENTRAL_TOKEN,"
 echo "       STORAGE_IMG, EXPORT_DIR, CENTRAL_EXPORT_URL)"
 echo "    2. Run: sudo /usr/local/sbin/create-storage-image.sh"
 echo "    3. Reboot to activate dwc2 overlay and watchdog"

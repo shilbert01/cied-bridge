@@ -16,9 +16,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
-IMPORT_DIR   = Path("/var/lib/pacemaker-export/import")
+IMPORT_DIR   = Path("/var/lib/cied-export/import")
 PORT         = 8080
-VERSION_FILE = Path("/etc/pacemaker/version")
+VERSION_FILE = Path("/etc/cied-bridge/version")
 
 
 def _read_version() -> dict:

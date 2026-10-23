@@ -54,7 +54,7 @@ drive always comes back even if a copy fails.
 | `daemon/hub_client.py` | Pi Zero | Shared hub client (claim/fetch/ack); also used by kardisynch-receiver |
 | `systemd/usb-import-gadget.service` | Pi Zero | Create image + gadget at boot |
 | `systemd/import-daemon.service` | Pi Zero | Run the presenter daemon |
-| `config/import.conf.example` | Pi Zero | Copy to `/etc/pacemaker-import/import.conf` |
+| `config/import.conf.example` | Pi Zero | Copy to `/etc/cied-import/import.conf` |
 
 ## Install — hub (Pi3)
 
@@ -67,7 +67,7 @@ systemctl enable --now import-server
 ## Install — presenter (Pi Zero, mirrors export-relay)
 
 ```sh
-install -m600 config/import.conf.example      /etc/pacemaker-import/import.conf   # then edit
+install -m600 config/import.conf.example      /etc/cied-import/import.conf   # then edit
 install -m755 gadget/create-storage-image.sh  /usr/local/sbin/
 install -m755 gadget/setup-gadget.sh          /usr/local/sbin/setup-gadget-import.sh
 install -m755 daemon/import_daemon.py          /usr/local/sbin/

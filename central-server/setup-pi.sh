@@ -1,15 +1,15 @@
 #!/bin/bash
 # Full setup script for the central server Pi.
-# Run as: sudo bash ~/pacemaker-central/setup-pi.sh
+# Run as: sudo bash ~/cied-central/setup-pi.sh
 set -euo pipefail
 
-DEPLOY_DIR=/opt/pacemaker-central
+DEPLOY_DIR=/opt/cied-central
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Clinic feature manifest ──────────────────────────────────────────────────
 # The central web UI is a clinic feature; gate it on FEATURE_CENTRAL_WEBUI.
 # Unset (or no manifest) defaults to "on" so existing central boxes are unaffected.
-CLINIC_CONF="${CLINIC_CONF:-/etc/pacemaker/clinic.conf}"
+CLINIC_CONF="${CLINIC_CONF:-/etc/cied-bridge/clinic.conf}"
 [ -f "$SRC_DIR/../tools/feature-lib.sh" ] && . "$SRC_DIR/../tools/feature-lib.sh"
 [ -f "$CLINIC_CONF" ] && . "$CLINIC_CONF"
 : "${FEATURE_CENTRAL_WEBUI:=on}"
@@ -54,7 +54,7 @@ if [[ ! -f "$DEPLOY_DIR/.env" ]]; then
     sed -i "s/INGEST_TOKEN=changeme/INGEST_TOKEN=${GENERATED_TOKEN}/" "$DEPLOY_DIR/.env"
     echo ""
     echo "    *** Generated INGEST_TOKEN: ${GENERATED_TOKEN} ***"
-    echo "    Set this as CENTRAL_TOKEN in /etc/pacemaker-edge/node.conf on each edge node."
+    echo "    Set this as CENTRAL_TOKEN in /etc/cied-edge/node.conf on each edge node."
     echo ""
     # Generate a random SMB password for the KardiSynch outbox share
     GENERATED_SMB_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
@@ -75,13 +75,13 @@ cp "$SRC_DIR/systemd/bt-pan.service"   /etc/systemd/system/
 echo "==> [5/6] Installing systemd unit for Docker Compose stack"
 cat > /etc/systemd/system/central-api.service <<'EOF'
 [Unit]
-Description=Pacemaker Central API (Docker Compose)
+Description=CIED Central API (Docker Compose)
 After=docker.service network-online.target
 Requires=docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/pacemaker-central
+WorkingDirectory=/opt/cied-central
 ExecStart=/usr/bin/docker compose up --build
 ExecStop=/usr/bin/docker compose down
 Restart=always
@@ -114,9 +114,9 @@ echo " Setup complete!"
 echo ""
 echo " Check status:  systemctl status central-api"
 echo " Follow logs:   journalctl -fu central-api"
-echo "                docker compose -C /opt/pacemaker-central logs -f"
+echo "                docker compose -C /opt/cied-central logs -f"
 echo ""
 echo " Once the container is up, extract the TLS cert for edge nodes:"
-echo "   docker compose -C /opt/pacemaker-central cp api:/certs/server.crt /tmp/server.crt"
+echo "   docker compose -C /opt/cied-central cp api:/certs/server.crt /tmp/server.crt"
 echo "   # then copy /tmp/server.crt to each edge node"
 echo "============================================================"

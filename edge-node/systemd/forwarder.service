@@ -1,5 +1,5 @@
 [Unit]
-Description=Pacemaker Print Job Forwarder
+Description=CIED Bridge Print Job Forwarder
 After=capture-daemon.service
 # network-online.target intentionally omitted: forwarder retries with exponential
 # backoff and waiting for DHCP on Pi Zero WiFi adds 30-90s to boot.

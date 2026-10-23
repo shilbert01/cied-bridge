@@ -1,17 +1,18 @@
 #!/bin/bash
-# clinic-pi3-redeploy.sh — idempotent hub provisioner.
+# clinic-hub-redeploy.sh — idempotent hub provisioner.
 #
-# Works on BOTH a fresh Raspberry Pi OS and an already-configured hub.
+# Works on Raspberry Pi OS AND Debian/Ubuntu x86 servers.
 # Fresh: installs packages, configures AP + CUPS + Samba, deploys all code.
 # Existing: updates code + configs, skips what's already in place.
 #
 # Usage:
-#   PI=192.168.179.110 REMOTE_USER=pi bash tools/clinic-pi3-redeploy.sh
-#   PI=10.99.0.1 bash tools/clinic-pi3-redeploy.sh       # defaults: REMOTE_USER=basti
-#   bash tools/clinic-pi3-redeploy.sh                     # PI=10.99.0.1 REMOTE_USER=basti
+#   PI=192.168.179.110 REMOTE_USER=pi bash tools/clinic-hub-redeploy.sh
+#   PI=ciedserver01.fritz.box REMOTE_USER=basti bash tools/clinic-hub-redeploy.sh
+#   PI=10.99.0.1 bash tools/clinic-hub-redeploy.sh       # defaults: REMOTE_USER=basti
+#   bash tools/clinic-hub-redeploy.sh                     # PI=10.99.0.1 REMOTE_USER=basti
 #
 # Environment:
-#   PI           — target IP (default 10.99.0.1)
+#   PI           — target IP or hostname (default 10.99.0.1)
 #   REMOTE_USER  — SSH user (default basti)
 #   AP_SSID      — relay AP SSID (default relayap)
 #   AP_PASS      — relay AP passphrase (default RelayPrint#1)
@@ -49,7 +50,7 @@ _ssh()  { ssh  "${SSH_OPTS[@]}" "$REMOTE_USER@$PI" "$@"; }
 _ssht() { ssh -t "${SSH_OPTS[@]}" "$REMOTE_USER@$PI" "$@"; }
 _scp()  { scp  "${SSH_OPTS[@]}" "$@" "$REMOTE_USER@$PI":/tmp/; }
 
-echo ">> checking reachability of Pi3 ($PI as $REMOTE_USER)"
+echo ">> checking reachability of hub ($PI as $REMOTE_USER)"
 ping -c1 -W2 "$PI" >/dev/null 2>&1 || { echo "!! $PI not reachable"; exit 1; }
 _ssh 'hostname' || { echo "!! SSH failed"; exit 1; }
 
@@ -107,17 +108,29 @@ SW_VERSION="$SW_VERSION"
 SW_COMMIT="$SW_COMMIT"
 WIFI_COUNTRY="$WIFI_COUNTRY"
 
-# ── Pin WiFi interface names via udev (RT5370 → wlan_ap, onboard → wlan_int) ─
+# ── Platform detection ─────────────────────────────────────────────────────
+IS_RPI=false
+if [ -f /proc/device-tree/model ] && grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
+    IS_RPI=true
+fi
+echo "   platform: \$(\$IS_RPI && echo 'Raspberry Pi' || echo "\$(uname -m) server")"
+
+# ── Pin WiFi interface names via udev ─────────────────────────────────────
 _pin_wifi_interfaces() {
-    local ap_mac="" ap_name="wlan_ap" int_name="wlan_int" onboard_mac="" rules=""
-    for dev in /sys/class/net/wlan*; do
+    local ap_mac="" ap_name="wlan_ap" int_name="wlan_int" onboard_mac="" usb_mac="" usb_name="" rules=""
+    # wlan* = Pi/classic naming; wlp* = x86 predictable naming
+    for dev in /sys/class/net/wlan* /sys/class/net/wlp*; do
         [ -d "\$dev" ] || continue
         local mac=\$(< "\$dev/address")
         local uevent="\$dev/device/uevent"
+        local devlink=\$(readlink -f "\$dev/device" 2>/dev/null)
         if [ -f "\$uevent" ] && grep -q '148F.*5370\|5370.*148F' "\$uevent" 2>/dev/null; then
             ap_mac="\$mac"
         elif [[ "\$mac" == b8:27:eb:* ]] || [[ "\$mac" == dc:a6:32:* ]] || [[ "\$mac" == d8:3a:dd:* ]] || [[ "\$mac" == e4:5f:01:* ]]; then
             onboard_mac="\$mac"
+        elif echo "\$devlink" | grep -q "/usb" 2>/dev/null; then
+            usb_mac="\$mac"
+            usb_name=\$(basename "\$dev")
         fi
     done
 
@@ -127,9 +140,20 @@ _pin_wifi_interfaces() {
         printf '%b\n' "\$rules" | sudo tee /etc/udev/rules.d/70-wifi-names.rules >/dev/null
         echo "   udev: \$ap_mac → \$ap_name" >&2
         echo "\$ap_name"
+    elif [ -n "\$usb_mac" ]; then
+        # Non-Pi server with a USB WiFi adapter
+        printf 'SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="%s", NAME="wlan_ap"\n' "\$usb_mac" | sudo tee /etc/udev/rules.d/70-wifi-names.rules >/dev/null
+        echo "   udev: USB WiFi (\$usb_mac, was \$usb_name) → wlan_ap" >&2
+        echo "wlan_ap"
     else
-        echo "   no RT5370 found, using wlan0" >&2
-        echo "wlan0"
+        local first=\$(ls -1d /sys/class/net/wlan* /sys/class/net/wlp* 2>/dev/null | head -1)
+        if [ -n "\$first" ]; then
+            echo "   using \$(basename "\$first")" >&2
+            basename "\$first"
+        else
+            echo "   WARNING: no wireless interface found" >&2
+            echo "wlan0"
+        fi
     fi
 }
 
@@ -143,21 +167,25 @@ command -v cupsd   >/dev/null 2>&1 || type cupsd   >/dev/null 2>&1 || [ -x /usr/
 if [ "\$FRESH" = 1 ]; then
     echo ">> [fresh system] installing packages"
     sudo apt-get update -qq
-    sudo apt-get install -y hostapd dnsmasq cups cups-bsd chrony samba ipp-usb rfkill python3-pip util-linux-extra
-    sudo apt-get install -y ghostpcl 2>/dev/null || echo "   ghostpcl not available — PCL→PDF archive conversion disabled"
+    PKGS="hostapd dnsmasq cups cups-bsd chrony samba ipp-usb rfkill python3-pip util-linux-extra"
+    if ! \$IS_RPI; then
+        # ghostscript provides 'gs' for PCL→PDF; wireless-tools for iwconfig
+        PKGS="\$PKGS ghostscript wireless-tools"
+    fi
+    sudo apt-get install -y \$PKGS
 fi
 
 # ── Feature manifest ────────────────────────────────────────────────────────
 sudo install -m 755 /tmp/feature-lib.sh      /usr/local/sbin/feature-lib.sh
 sudo install -m 755 /tmp/configure-clinic.sh /usr/local/sbin/configure-clinic.sh
-sudo install -d -m 755 /etc/pacemaker
-if [ ! -f /etc/pacemaker/clinic.conf ]; then
-    sudo install -m 600 /tmp/clinic.conf.example /etc/pacemaker/clinic.conf
+sudo install -d -m 755 /etc/cied-bridge
+if [ ! -f /etc/cied-bridge/clinic.conf ]; then
+    sudo install -m 600 /tmp/clinic.conf.example /etc/cied-bridge/clinic.conf
     echo '   seeded clinic.conf'
 fi
 
 # ── Software version stamp ─────────────────────────────────────────────────
-sudo tee /etc/pacemaker/version >/dev/null << EOF
+sudo tee /etc/cied-bridge/version >/dev/null << EOF
 version=\$SW_VERSION
 commit=\$SW_COMMIT
 deployed=\$(date -Iseconds)
@@ -339,8 +367,10 @@ sudo udevadm control --reload-rules 2>/dev/null || true
 
 sudo mkdir -p /var/lib/relay-ui /var/lib/relay-ui/job-archive
 sudo mkdir -p /usr/local/share/relay-firmware
-# gpcl6 for PCL→PDF archive conversion (not packaged in Debian 13, shipped as binary)
-[ -f /tmp/gpcl6 ] && sudo install -m 755 /tmp/gpcl6 /usr/local/bin/gpcl6 && echo "   gpcl6 installed"
+# gpcl6 for PCL→PDF archive conversion (Pi: shipped as ARM binary; x86: from ghostpcl package)
+if \$IS_RPI && [ -f /tmp/gpcl6 ]; then
+    sudo install -m 755 /tmp/gpcl6 /usr/local/bin/gpcl6 && echo "   gpcl6 installed (ARM binary)"
+fi
 [ -f /tmp/usb_dongle.bin ] && sudo install -m 644 /tmp/usb_dongle.bin /usr/local/share/relay-firmware/
 sudo rm -f /var/lib/printer-autoconf/decision
 
@@ -364,22 +394,22 @@ sudo systemctl enable printer-config 2>/dev/null || true
 [ -f /tmp/import-server.py ] && {
     sudo install -m 755 /tmp/import-server.py      /usr/local/sbin/
     sudo install -m 644 /tmp/import-server.service /etc/systemd/system/
-    sudo mkdir -p /var/lib/pacemaker-import-hub
+    sudo mkdir -p /var/lib/cied-import-hub
 }
 
 # ── Samba share ─────────────────────────────────────────────────────────────
-sudo mkdir -p /var/lib/pacemaker-export/import
-sudo chmod 777 /var/lib/pacemaker-export/import
-if which smbd >/dev/null 2>&1 && ! grep -q '\[import\]' /etc/samba/smb.conf 2>/dev/null; then
+sudo mkdir -p /var/lib/cied-export/import
+sudo chmod 777 /var/lib/cied-export/import
+if [ -x /usr/sbin/smbd ] && ! grep -q '\\[import\\]' /etc/samba/smb.conf 2>/dev/null; then
     sudo tee /etc/samba/smb.conf >/dev/null << 'EOF'
 [global]
    workgroup = WORKGROUP
-   server string = Pacemaker Relay Hub
+   server string = CIED Hub
    log level = 1
    map to guest = bad user
 
 [import]
-   path = /var/lib/pacemaker-export/import
+   path = /var/lib/cied-export/import
    browseable = yes
    read only = no
    guest ok = yes
@@ -389,31 +419,31 @@ EOF
     echo "   configured Samba [import] share"
 fi
 
-# ── Boot config (dwc2 + RTC) ───────────────────────────────────────────────
-BOOT_CONFIG="/boot/firmware/config.txt"
+# ── Boot config (dwc2 + RTC — Pi only) ────────────────────────────────────
 NEEDS_REBOOT=0
-if [ -f "\$BOOT_CONFIG" ]; then
-    # Check for dwc2 specifically in [all] section — stock Pi OS has it under [cm5]
-    # which doesn't apply to Pi3.
-    if ! sudo sed -n '/^\[all\]/,/^\[/p' "\$BOOT_CONFIG" 2>/dev/null | grep -q "dtoverlay=dwc2"; then
-        sudo cp "\$BOOT_CONFIG" "\${BOOT_CONFIG}.pre-dwc2"
-        if grep -q '^\[all\]' "\$BOOT_CONFIG"; then
-            sudo sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=host' "\$BOOT_CONFIG"
-        else
-            printf '\n[all]\ndtoverlay=dwc2,dr_mode=host\n' | sudo tee -a "\$BOOT_CONFIG" >/dev/null
+if \$IS_RPI; then
+    BOOT_CONFIG="/boot/firmware/config.txt"
+    if [ -f "\$BOOT_CONFIG" ]; then
+        if ! sudo sed -n '/^\[all\]/,/^\[/p' "\$BOOT_CONFIG" 2>/dev/null | grep -q "dtoverlay=dwc2"; then
+            sudo cp "\$BOOT_CONFIG" "\${BOOT_CONFIG}.pre-dwc2"
+            if grep -q '^\[all\]' "\$BOOT_CONFIG"; then
+                sudo sed -i '/^\[all\]/a dtoverlay=dwc2,dr_mode=host' "\$BOOT_CONFIG"
+            else
+                printf '\n[all]\ndtoverlay=dwc2,dr_mode=host\n' | sudo tee -a "\$BOOT_CONFIG" >/dev/null
+            fi
+            NEEDS_REBOOT=1
         fi
-        NEEDS_REBOOT=1
-    fi
-    if ! grep -q "dtoverlay=i2c-rtc,ds3231" "\$BOOT_CONFIG"; then
-        if grep -q '^\[all\]' "\$BOOT_CONFIG"; then
-            sudo sed -i '/^\[all\]/a dtoverlay=i2c-rtc,ds3231' "\$BOOT_CONFIG"
+        if ! grep -q "dtoverlay=i2c-rtc,ds3231" "\$BOOT_CONFIG"; then
+            if grep -q '^\[all\]' "\$BOOT_CONFIG"; then
+                sudo sed -i '/^\[all\]/a dtoverlay=i2c-rtc,ds3231' "\$BOOT_CONFIG"
+            fi
+            NEEDS_REBOOT=1
         fi
-        NEEDS_REBOOT=1
     fi
-fi
-BOOT_CMDLINE="/boot/firmware/cmdline.txt"
-if [ -f "\$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "\$BOOT_CMDLINE"; then
-    sudo sed -i 's/ *dwc_otg\.speed=[0-9]*//' "\$BOOT_CMDLINE"
+    BOOT_CMDLINE="/boot/firmware/cmdline.txt"
+    if [ -f "\$BOOT_CMDLINE" ] && grep -q "dwc_otg\.speed=" "\$BOOT_CMDLINE"; then
+        sudo sed -i 's/ *dwc_otg\.speed=[0-9]*//' "\$BOOT_CMDLINE"
+    fi
 fi
 
 # ── RTC sync ───────────────────────────────────────────────────────────
@@ -430,11 +460,11 @@ sudo usermod -aG lpadmin "\$(whoami)" 2>/dev/null || true
 sudo systemctl daemon-reload
 sudo systemctl enable --now relay-print-watchdog.timer 2>/dev/null || true
 
-sudo sh -c '. /usr/local/sbin/feature-lib.sh; . /etc/pacemaker/clinic.conf 2>/dev/null || true
+sudo sh -c '. /usr/local/sbin/feature-lib.sh; . /etc/cied-bridge/clinic.conf 2>/dev/null || true
     apply_feature_service FEATURE_SAMBA_SHARE   "smbd nmbd export-config"
     apply_feature_service FEATURE_IMPORT_HUB    "import-server"
     apply_feature_service FEATURE_PRINTER_WEBUI "cups printer-config cups-lpd.socket cups-lpd-ensure.service relay-print-watchdog.timer"
-    echo "   manifest applied:"; grep -E "^FEATURE_" /etc/pacemaker/clinic.conf 2>/dev/null | sed "s/^/     /"'
+    echo "   manifest applied:"; grep -E "^FEATURE_" /etc/cied-bridge/clinic.conf 2>/dev/null | sed "s/^/     /"'
 
 # ── Printer autoconf (background) ──────────────────────────────────────────
 sudo /usr/local/sbin/cups-autoconf-printer.sh &
@@ -452,7 +482,7 @@ echo "   sta-health:\$(systemctl is-active station-health-monitor)"
 ENDSCRIPT
 
 # ── Push and execute ─────────────────────────────────────────────────────────
-echo ">> deploying on Pi3 (needs sudo password on fresh system)"
+echo ">> deploying on hub (needs sudo password on fresh system)"
 _scp "$REMOTE_SCRIPT"
 _ssht "bash /tmp/$(basename "$REMOTE_SCRIPT")"
 
@@ -461,3 +491,4 @@ echo ">> done."
 echo "   Printer UI: http://$PI/"
 echo "   Export UI:  http://$PI:8080/"
 echo "   Samba:      \\\\$PI\\import"
+echo "   Import hub: http://$PI:8090/"

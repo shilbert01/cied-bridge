@@ -57,7 +57,7 @@ config:
 
 ```sh
 # from your workstation — copy this subproject AND import-relay (shared hub_client):
-rsync -a pacemaker-bridge/{kardisynch-receiver,import-relay} pi@<pi-host>:~/
+rsync -a cied-bridge/{kardisynch-receiver,import-relay} pi@<pi-host>:~/
 
 # on the Pi:
 sudo bash kardisynch-receiver/install-receiver.sh hid

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-CONF=/etc/pacemaker-edge/node.conf
+CONF=/etc/cied-edge/node.conf
 [ -f "$CONF" ] || { echo "Missing $CONF"; exit 1; }
 # shellcheck source=/dev/null
 . "$CONF"

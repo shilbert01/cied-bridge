@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 QUEUE     = "LaserPrinter"
 PORT      = 80
 CUPS_CONF = "/etc/cups/cupsd.conf"
-VERSION_FILE = Path("/etc/pacemaker/version")
+VERSION_FILE = Path("/etc/cied-bridge/version")
 
 # Every CUPS call gets a timeout. Without one, a wedged cupsd or a stuck backend
 # (e.g. a job spooled against a disconnected usb:// printer) blocks the request
@@ -32,7 +32,7 @@ SLOW_TIMEOUT  = 30   # cups restart / spooling a job file
 
 PI0_HOST  = "10.99.0.2"
 PI0_USER  = "root"
-PI0_CONF  = "/etc/pacemaker-relay/relay.conf"
+PI0_CONF  = "/etc/cied-relay/relay.conf"
 PI0_PROBE_TIMEOUT = 0.5   # seconds; TCP probe before paying the ssh ConnectTimeout
 MEDIASOURCE_TTL   = 60    # seconds between background refreshes of the cached value
 DEVICE_TTL        = 20    # seconds between CUPS device/queue re-probes
@@ -886,7 +886,7 @@ def _job_sources() -> dict:
 
 # ── Export share (Samba import directory) ─────────────────────────────────────
 
-IMPORT_DIR = Path("/var/lib/pacemaker-export/import")
+IMPORT_DIR = Path("/var/lib/cied-export/import")
 IMPORT_HUB_URL = "http://localhost:8090"
 
 
@@ -1387,7 +1387,7 @@ def _page(message: str = "", error: bool = False) -> bytes:
   <style>{CSS}</style>
 </head>
 <body>
-  <h1>Pacemaker Relay Hub</h1>
+  <h1>CIED Hub</h1>
   {msg}
 
   <div class="tabs">

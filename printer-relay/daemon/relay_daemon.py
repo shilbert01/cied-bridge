@@ -21,7 +21,7 @@ import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
-CONFIG_PATH      = "/etc/pacemaker-relay/relay.conf"
+CONFIG_PATH      = "/etc/cied-relay/relay.conf"
 READ_CHUNK       = 4096
 OPEN_RETRY_DELAY = 2     # seconds between retries when gadget device is not ready
 JOB_IDLE_TIMEOUT = 5.0   # seconds of gadget silence before finalising a job

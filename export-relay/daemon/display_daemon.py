@@ -351,12 +351,12 @@ def _blit_text(draw, pos, text, fill=0):
 
 # ── Status gathering ──────────────────────────────────────────────────────────
 
-CONFIG_PATH        = "/etc/pacemaker-export/export.conf"
-EXPORT_DIR         = "/var/lib/pacemaker-export/exports"
+CONFIG_PATH        = "/etc/cied-export/export.conf"
+EXPORT_DIR         = "/var/lib/cied-export/exports"
 DISPLAY_PID_FILE   = "/var/run/display_daemon.pid"
 UPLOAD_SENTINEL    = "/var/run/uploading"
 RECEIVE_SENTINEL   = "/var/run/receiving"
-FORWARD_COUNT_FILE = "/var/lib/pacemaker-export/forward_count.txt"
+FORWARD_COUNT_FILE = "/var/lib/cied-export/forward_count.txt"
 
 
 def _load_conf() -> dict:

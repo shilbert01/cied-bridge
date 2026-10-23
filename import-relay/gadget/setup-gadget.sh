@@ -9,7 +9,7 @@
 #     brings the gadget up with the image already attached.
 set -eu
 
-CONF=/etc/pacemaker-import/import.conf
+CONF=/etc/cied-import/import.conf
 [ -f "$CONF" ] || { echo "Missing $CONF"; exit 1; }
 # shellcheck source=/dev/null
 . "$CONF"
