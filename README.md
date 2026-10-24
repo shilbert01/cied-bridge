@@ -68,7 +68,7 @@ PI=192.168.1.50 REMOTE_USER=john bash tools/clinic-hub-redeploy.sh
 **Local deploy** (already SSH'd into the hub):
 
 ```bash
-git clone https://github.com/konsilado/cied-bridge.git
+git clone https://github.com/shilbert01/cied-bridge.git
 cd cied-bridge
 sudo bash printer-relay/pi3-server/setup-cups.sh
 ```
@@ -123,6 +123,32 @@ Generate a manifest interactively:
 ```bash
 tools/configure-clinic.sh
 ```
+
+### WiFi passphrase
+
+The relay subnet WiFi AP (`relayap`) ships with a default passphrase of `CiedRelay#1`. **Change it before any production deployment.**
+
+Set it at deploy time via environment variable:
+
+```bash
+# Remote deploy
+AP_PASS="YourClinicPassphrase" PI=192.168.1.50 REMOTE_USER=john bash tools/clinic-hub-redeploy.sh
+
+# Local deploy
+AP_PASS="YourClinicPassphrase" sudo bash printer-relay/pi3-server/setup-cups.sh
+```
+
+Or set it interactively via `tools/configure-clinic.sh` (prompts for AP SSID and passphrase).
+
+After changing the hub passphrase, update the relay nodes to match:
+
+| Relay type | Where to change |
+|------------|----------------|
+| Buildroot Pi Zero | `board/pacemaker-relay/rootfs-overlay/etc/wpa_supplicant/wpa_supplicant.conf` → rebuild |
+| Pi OS Pi Zero | `/etc/wpa_supplicant/wpa_supplicant.conf` on the device |
+| Pico 2W | `WIFI_PASS` in `printer-relay/pico2w/config.h` → rebuild and reflash |
+| ESP32-S3 | WiFi credentials on SD card (`wifi.txt`) or firmware config |
+| KardiSynch receiver | `WIFI_PSK=... sudo bash install-receiver.sh` |
 
 ## Status
 

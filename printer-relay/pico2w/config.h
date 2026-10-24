@@ -4,7 +4,7 @@
 // Relay subnet / print server — mirrors printer-relay/config/relay.conf.example
 // and the Pi3 AP described in pacemaker-central-relay-spec.md (§3).
 #define WIFI_SSID           "relayap"        // BROADCAST WPA3/WPA2 AP on the Pi3
-#define WIFI_PASS           "RelayPrint#1"   // changeable — keep in sync with Pi3 hostapd
+#define WIFI_PASS           "CiedRelay#1"    // default — keep in sync with Pi3 hostapd
 // WPA2-PSK. The CYW43439 supports WPA3-SAE as a CLIENT, but the AP (Pi3 Broadcom
 // brcmfmac) CANNOT host SAE/PMF in AP mode (hostapd dies "key setting validation
 // failed", 2026-07-26) — the AP is the limiter, so the fleet stays WPA2-PSK.

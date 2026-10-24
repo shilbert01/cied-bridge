@@ -38,7 +38,7 @@ CLAIM_MAX=10
 
 # WiFi — connects to Pi3's hidden AP (same relay subnet as export-relay)
 WIFI_SSID=relayap
-WIFI_PSK=RelayPrint#1
+WIFI_PSK=CiedRelay#1
 
 # Pi3 server host for NTP / reachability check
 PRINT_SERVER_HOST=10.99.0.1

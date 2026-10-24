@@ -25,7 +25,7 @@ GIVEUP_SECS=300
 
 # WiFi — connects to Pi3's hidden AP
 WIFI_SSID=relayap
-WIFI_PSK=RelayPrint#1
+WIFI_PSK=CiedRelay#1
 
 # Pi3 server host for NTP / reachability check
 PRINT_SERVER_HOST=10.99.0.1

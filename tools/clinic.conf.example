@@ -10,7 +10,7 @@ CLINIC_NAME="example-clinic"
 # ── Relay subnet / AP (foundation — needed by every relay feature below) ──────
 FEATURE_RELAY_AP=on
 AP_SSID="relayap"
-AP_PASS="RelayPrint#1"
+AP_PASS="CiedRelay#1"
 AP_CHANNEL=6
 AP_HIDDEN=off          # off = broadcast. Keep off: a hidden SSID broke the Pico 2W join path.
 WIFI_COUNTRY=DE

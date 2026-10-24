@@ -6,7 +6,7 @@ set -euo pipefail
 CONF=/etc/cied-edge/node.conf
 CA_DEST=/etc/cied-edge/central-ca.crt
 AP_SSID="CIEDCentral"
-AP_PASS="CardioLink#26"
+AP_PASS="CiedCentral#1"
 AP_IP="10.42.0.1"
 
 # ── Step 1: connect to AP first so we can reach the central server ──────────

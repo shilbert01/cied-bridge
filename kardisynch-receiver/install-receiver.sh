@@ -19,7 +19,7 @@
 #     HUB_URL         http://10.99.0.1:8090
 #     CONFIGURE_WIFI  0                   set 1 to write the relayap connection here
 #     WIFI_SSID       relayap
-#     WIFI_PSK        RelayPrint#1
+#     WIFI_PSK        CiedRelay#1
 #     WIFI_COUNTRY    DE
 set -euo pipefail
 
@@ -29,7 +29,7 @@ NODE_ID="${NODE_ID:-hid-clinic-01}"
 HUB_URL="${HUB_URL:-http://10.99.0.1:8090}"
 CONFIGURE_WIFI="${CONFIGURE_WIFI:-0}"
 WIFI_SSID="${WIFI_SSID:-relayap}"
-WIFI_PSK="${WIFI_PSK:-RelayPrint#1}"
+WIFI_PSK="${WIFI_PSK:-CiedRelay#1}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-DE}"
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # kardisynch-receiver/

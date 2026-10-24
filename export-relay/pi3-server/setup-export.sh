@@ -9,7 +9,7 @@
 #   Pi3 wlan0:   10.99.0.1
 #   Pi Zero:     10.99.0.2  (static, set in export.conf / S40wifi)
 #
-# AP passphrase is RelayPrint#1 — change in /etc/hostapd/hostapd.conf after setup.
+# Default AP passphrase — override with AP_PASS env var before running this script.
 
 set -euo pipefail
 
@@ -32,7 +32,7 @@ AP_IP=10.99.0.1
 AP_DHCP_START=10.99.0.10
 AP_DHCP_END=10.99.0.50
 : "${AP_SSID:=relayap}"
-: "${AP_PASS:=RelayPrint#1}"
+: "${AP_PASS:=CiedRelay#1}"
 : "${AP_CHANNEL:=6}"
 : "${AP_HIDDEN:=off}"
 AP_HIDE=$([ "$(printf %s "$AP_HIDDEN"|tr A-Z a-z)" = on ] && echo 2 || echo 0)

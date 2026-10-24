@@ -221,7 +221,7 @@ Options under consideration:
 ### Network connectivity
 
 **On-site (relay subnet):**
-- Pi 3 creates a hidden WPA2-PSK WiFi AP (`relayap`, passphrase `RelayPrint#1` — changeable)
+- Pi 3 creates a WPA2-PSK WiFi AP (`relayap`, default passphrase `CiedRelay#1` — change before production deploy)
 - Subnet: `10.99.0.0/24`, Pi 3 at `.1`, Pi Zero at `.2` (static)
 - Pi Zero has no route to the internet — all traffic stays on the relay subnet
 - Pi 3 eth0 connects to the clinic LAN or internet for management and (future) cloud upload

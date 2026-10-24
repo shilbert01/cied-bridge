@@ -84,7 +84,7 @@ The page shows the currently active CUPS printer and all detected USB printers, 
 
 **Typical workflow at a new site:**
 1. Connect the USB printer to the Pi3
-2. Connect your phone or laptop to relayap (`RelayPrint#1`)
+2. Connect your phone or laptop to relayap (`CiedRelay#1`)
 3. Open `http://10.99.0.1/` — the printer should appear automatically (via udev, see above)
 4. If already selected (✓), nothing to do — start printing
 
@@ -96,5 +96,21 @@ sudo /usr/local/sbin/cups-autoconf-printer.sh
 
 ## AP passphrase
 
-Default: `RelayPrint#1` — change in `/etc/hostapd/hostapd.conf` and update
-`/etc/wpa_supplicant/wpa_supplicant.conf` on the Pi Zero image accordingly.
+Default: `CiedRelay#1` — **change this before deploying in production.**
+
+To customise at install time, set `AP_PASS` before running the setup script:
+
+```bash
+AP_PASS="YourClinicPassphrase" sudo bash printer-relay/pi3-server/setup-cups.sh
+```
+
+Or use the interactive configurator:
+
+```bash
+sudo bash tools/configure-clinic.sh
+```
+
+After changing the hub passphrase, update the relay nodes to match:
+- **Buildroot Pi Zero:** rebuild with the new PSK in the wpa_supplicant overlay
+- **Pi OS Pi Zero:** edit `/etc/wpa_supplicant/wpa_supplicant.conf`
+- **Pico 2W:** update `WIFI_PASS` in `printer-relay/pico2w/config.h` and reflash

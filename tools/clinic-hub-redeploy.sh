@@ -15,7 +15,7 @@
 #   PI           — target IP or hostname (default 10.99.0.1)
 #   REMOTE_USER  — SSH user (default basti)
 #   AP_SSID      — relay AP SSID (default relayap)
-#   AP_PASS      — relay AP passphrase (default RelayPrint#1)
+#   AP_PASS      — relay AP passphrase (default CiedRelay#1)
 #   AP_CHANNEL   — WiFi channel (default 6)
 #   AP_HIDDEN    — on/off (default off)
 #   CLINIC_FLAGS — extra flags for configure-clinic.sh
@@ -35,7 +35,7 @@ SW_VERSION="$(cat "$REPO/VERSION" 2>/dev/null | tr -d '[:space:]')"
 SW_COMMIT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 : "${AP_SSID:=relayap}"
-: "${AP_PASS:=RelayPrint#1}"
+: "${AP_PASS:=CiedRelay#1}"
 : "${AP_CHANNEL:=6}"
 : "${AP_HIDDEN:=off}"
 : "${WIFI_COUNTRY:=DE}"
