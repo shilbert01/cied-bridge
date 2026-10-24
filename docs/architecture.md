@@ -25,7 +25,7 @@ Supporting names (not roles):
 - **KardiSynch** — the customer's data-file application (its parsers are what the
   extraction service augments/replaces).
 - **CIED Central** — the **data hub's** management web UI.
-- **CiedOCR** — today's implementation of the **extraction service**.
+- **CIED Extract** — today's implementation of the **extraction service**.
 
 ---
 
@@ -117,7 +117,7 @@ The currently deployed Pi3 (`10.99.0.1`) has only the `printer` role enabled (cu
 
 Parses data files (`.hl7 .xml .bnk .pdd .pkg …`) into structured results. It is a
 **called component**, not baked into a hub:
-- LLM-backed parts run on **bigboy** (today: **CiedOCR**).
+- LLM-backed parts run on **bigboy** (today: **CIED Extract**).
 - Non-LLM parts could run anywhere, including on a data hub.
 - It supplements/replaces KardiSynch's built-in parsers where more capability is
   needed.
@@ -147,7 +147,7 @@ PROGRAMMER  (two USB personalities → two relays, or one composite relay)
          · relay detects new files, forwards to the data hub (/ingest-export)
          · data hub stores them (/data/exports) and mirrors the KardiSynch-
            parseable set into an outbox (/data/kardisynch-outbox)
-         · extraction service may parse them (CiedOCR on bigboy) — more capable
+         · extraction service may parse them (CIED Extract on bigboy) — more capable
            than KardiSynch's own parsers
          │
          │  DELIVERY to a customer PC that can't reach the data hub on the network:
@@ -180,7 +180,7 @@ companion), byte-perfect.
 | `central-server/` (CIED Central) | hub · `HUB_ROLE=data` |
 | `import-relay/pi3-server/import-server.py` | hub **queue** component (shared) |
 | `import-relay/daemon/hub_client.py` | shared relay↔hub client |
-| CiedOCR @ bigboy | extraction service |
+| CIED Extract @ bigboy | extraction service |
 | `configure-clinic.sh` / `feature-lib.sh` / `clinic.conf` | hub role/feature selection (seed of `HUB_ROLE`) |
 
 ---

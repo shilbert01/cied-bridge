@@ -1,18 +1,18 @@
 """
-Client for the CIEDOcr extraction service — see docs/ciedocr-integration.md and
-CiedOCR/docs/extract-api-v1.md.
+Client for the CIED Extract service — see docs/cied-extract-integration.md and
+cied-extract/docs/extract-api-v1.md.
 
 The central Pi submits a PDF, polls the async job, and maps the returned
-`PacemakerReport` onto the `interrogations` table (storing the full report verbatim
+`CIEDReport` onto the `interrogations` table (storing the full report verbatim
 in `extract_json`). Two failure classes are distinguished so the job state machine
 can react:
-  * CiedocrUnavailable — transient (service down/loading/timeout, or blocked by the
+  * CiedExtractUnavailable — transient (service down/loading/timeout, or blocked by the
     PHI policy) → caller keeps the job re-queueable (`raw_only`).
-  * CiedocrError       — terminal (service rejected the PDF, or returned no_text) →
+  * CiedExtractError       — terminal (service rejected the PDF, or returned no_text) →
     caller marks the job `failed`.
 
 Config (env, mirrors node.conf pattern):
-  CIEDOCR_URL, CIEDOCR_TOKEN, CIEDOCR_TIMEOUT, CIEDOCR_ALLOW_REMOTE_PHI
+  CIED_EXTRACT_URL, CIED_EXTRACT_TOKEN, CIED_EXTRACT_TIMEOUT, CIED_EXTRACT_ALLOW_REMOTE_PHI
 """
 import json
 import logging
@@ -28,11 +28,11 @@ log = logging.getLogger(__name__)
 POLL_INTERVAL = 5   # seconds
 
 
-class CiedocrUnavailable(Exception):
+class CiedExtractUnavailable(Exception):
     """Transient — retry later (service down/loading/timeout, or PHI-blocked)."""
 
 
-class CiedocrError(Exception):
+class CiedExtractError(Exception):
     """Terminal — the request/PDF cannot be extracted (rejected or no_text)."""
 
 
@@ -42,19 +42,19 @@ def _cfg(key: str, default: str = "") -> str:
 
 
 def url() -> str:
-    return _cfg("CIEDOCR_URL").rstrip("/")
+    return _cfg("CIED_EXTRACT_URL").rstrip("/")
 
 
 def _token() -> str:
-    return _cfg("CIEDOCR_TOKEN")
+    return _cfg("CIED_EXTRACT_TOKEN")
 
 
 def _timeout() -> int:
-    return int(_cfg("CIEDOCR_TIMEOUT", "300"))
+    return int(_cfg("CIED_EXTRACT_TIMEOUT", "300"))
 
 
 def _allow_remote_phi() -> bool:
-    return _cfg("CIEDOCR_ALLOW_REMOTE_PHI", "false").lower() in ("1", "true", "yes")
+    return _cfg("CIED_EXTRACT_ALLOW_REMOTE_PHI", "false").lower() in ("1", "true", "yes")
 
 
 def configured() -> bool:
@@ -90,11 +90,11 @@ def extract(pdf_path: str, vendor_hint: str = "") -> dict:
     """Submit a PDF async, poll to completion, return the result envelope.
 
     vendor_hint selects the per-vendor extractor on the service side.
-    Raises CiedocrUnavailable (transient) or CiedocrError (terminal)."""
+    Raises CiedExtractUnavailable (transient) or CiedExtractError (terminal)."""
     if not configured():
-        raise CiedocrUnavailable("CIEDOCR_URL not set")
+        raise CiedExtractUnavailable("CIED_EXTRACT_URL not set")
     if is_remote() and not _allow_remote_phi():
-        raise CiedocrUnavailable("remote CIEDOcr blocked by CIEDOCR_ALLOW_REMOTE_PHI=false")
+        raise CiedExtractUnavailable("remote CIED Extract blocked by CIED_EXTRACT_ALLOW_REMOTE_PHI=false")
 
     data = Path(pdf_path).read_bytes()
 
@@ -113,10 +113,10 @@ def extract(pdf_path: str, vendor_hint: str = "") -> dict:
             submit = json.loads(r.read())
     except urllib.error.HTTPError as e:
         if e.code == 503:
-            raise CiedocrUnavailable(f"service loading (HTTP {e.code})")
-        raise CiedocrError(f"submit rejected (HTTP {e.code})")
+            raise CiedExtractUnavailable(f"service loading (HTTP {e.code})")
+        raise CiedExtractError(f"submit rejected (HTTP {e.code})")
     except Exception as e:
-        raise CiedocrUnavailable(f"submit failed: {e}")
+        raise CiedExtractUnavailable(f"submit failed: {e}")
 
     poll_url = url() + submit.get("poll", "/v1/jobs/" + str(submit.get("job_id")))
 
@@ -129,10 +129,10 @@ def extract(pdf_path: str, vendor_hint: str = "") -> dict:
                 res = json.loads(r.read())
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                raise CiedocrError("job expired or unknown")
-            raise CiedocrUnavailable(f"poll failed (HTTP {e.code})")
+                raise CiedExtractError("job expired or unknown")
+            raise CiedExtractUnavailable(f"poll failed (HTTP {e.code})")
         except Exception as e:
-            raise CiedocrUnavailable(f"poll failed: {e}")
+            raise CiedExtractUnavailable(f"poll failed: {e}")
 
         status = res.get("status")
         if status in ("queued", "running"):
@@ -140,15 +140,15 @@ def extract(pdf_path: str, vendor_hint: str = "") -> dict:
         if status == "ok":
             return res
         if status == "no_text":
-            raise CiedocrError("no_text — nothing extractable from PDF")
+            raise CiedExtractError("no_text — nothing extractable from PDF")
         if status == "error":
-            raise CiedocrError(res.get("detail", "extraction error"))
-        raise CiedocrError(f"unexpected status: {status}")
+            raise CiedExtractError(res.get("detail", "extraction error"))
+        raise CiedExtractError(f"unexpected status: {status}")
 
-    raise CiedocrUnavailable("extraction poll timed out")
+    raise CiedExtractUnavailable("extraction poll timed out")
 
 
-# ── mapping: CIEDOcr PacemakerReport → interrogations fields ──────────────────
+# ── mapping: CIED Extract CIEDReport → interrogations fields ─────────────────
 def _num(value) -> float | None:
     """First numeric token from strings like '330 Ω', '6,9 mV' (comma decimals)."""
     if value is None:
@@ -182,7 +182,7 @@ def map_report(envelope: dict) -> dict:
         return None
 
     def sec(name, key):
-        """Nested Abbott/PacemakerReport lookup, e.g. sec('test_rv','impedance_ohm')."""
+        """Nested Abbott/CIEDReport lookup, e.g. sec('test_rv','impedance_ohm')."""
         block = report.get(name)
         return block.get(key) if isinstance(block, dict) else None
 
@@ -194,7 +194,7 @@ def map_report(envelope: dict) -> dict:
         return None
 
     # Two extractor families: flat (pdfplumber vendors) and nested
-    # (Abbott VQA → PacemakerReport). Try both so either populates the columns.
+    # (Abbott VQA → CIEDReport). Try both so either populates the columns.
     fields = {
         "patient_id":         first("patient_id", "patient_name", "patient"),
         "device_serial":      report.get("device_serial"),

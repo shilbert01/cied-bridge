@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 
 from .parsers import get_export_parser, detect_export_vendor
 from .parsers.base import ParseError
-from . import ciedocr, render, kardisynch_outbox
+from . import cied_extract, render, kardisynch_outbox
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,10 +52,10 @@ def startup():
     (_DATA_DIR / "pdf").mkdir(parents=True, exist_ok=True)
     (_DATA_DIR / "exports").mkdir(parents=True, exist_ok=True)
     db.init(os.environ.get("DB_PATH", str(_DATA_DIR / "db.sqlite")))
-    threading.Thread(target=_retry_worker, name="ciedocr-retry", daemon=True).start()
+    threading.Thread(target=_retry_worker, name="cied-extract-retry", daemon=True).start()
     threading.Thread(target=_kardisynch_outbox_worker, name="kardisynch-outbox", daemon=True).start()
-    log.info("Central server ready — data: %s  ·  CIEDOcr: %s",
-             _DATA_DIR, ciedocr.url() or "(not configured)")
+    log.info("Central server ready — data: %s  ·  CIED Extract: %s",
+             _DATA_DIR, cied_extract.url() or "(not configured)")
 
 
 def _kardisynch_outbox_worker():
@@ -64,13 +64,13 @@ def _kardisynch_outbox_worker():
 
 
 def _retry_worker():
-    """Re-queue raw_only jobs when CIEDOcr is back; re-render pcl_only jobs if gpdl appears."""
-    interval = int(os.environ.get("CIEDOCR_HEALTH_INTERVAL", "30"))
+    """Re-queue raw_only jobs when CIED Extract is back; re-render pcl_only jobs if gpdl appears."""
+    interval = int(os.environ.get("CIED_EXTRACT_HEALTH_INTERVAL", "30"))
     while True:
         time.sleep(interval)
         try:
-            # Re-queue raw_only → CIEDOcr extraction once it's reachable.
-            if ciedocr.configured() and ciedocr.health():
+            # Re-queue raw_only → CIED Extract once it's reachable.
+            if cied_extract.configured() and cied_extract.health():
                 for row in db.get_jobs_for_retry():
                     pdf = row.get("render_pdf_path")
                     if pdf and Path(pdf).exists():
@@ -166,7 +166,7 @@ async def ingest(
         log.info("Duplicate ingest for %s — already in DB as job %d", x_job_name, job_id)
         return {"job_id": job_id, "status": "accepted"}
 
-    # Always render a viewable PDF locally so the dashboard works even if CIEDOcr is down.
+    # Always render a viewable PDF locally so the dashboard works even if CIED Extract is down.
     rendered = render.ps_to_pdf(str(ps_path), str(pdf_path))
     if not rendered:
         if render.is_pcl(str(ps_path)):
@@ -179,7 +179,7 @@ async def ingest(
         return {"job_id": job_id, "status": "accepted"}
     db.set_job_status(job_id, "renderable", render_pdf_path=str(pdf_path))
 
-    # Delegate structured extraction to CIEDOcr in the background (202 returned now).
+    # Delegate structured extraction to CIED Extract in the background (202 returned now).
     threading.Thread(target=_extract_job, args=(job_id, str(pdf_path), x_vendor), daemon=True).start()
     return {"job_id": job_id, "status": "accepted"}
 
@@ -226,8 +226,8 @@ async def ingest_export(
                                  args=(vendor, x_node_id, x_session_id, str(file_path)),
                                  daemon=True).start()
             else:
-                # All other vendors (incl. abbott): attempt CIEDOcr extraction.
-                # Abbott Merlin PDFs are raster-only but CIEDOcr handles them via Qwen3-VL VQA.
+                # All other vendors (incl. abbott): attempt CIED Extract extraction.
+                # Abbott Merlin PDFs are raster-only but CIED Extract handles them via Qwen3-VL VQA.
                 threading.Thread(target=_extract_job, args=(job_id, str(file_path), vendor),
                                  daemon=True).start()
     else:
@@ -291,26 +291,26 @@ def _parse_export(vendor: str, node_id: str, session_id: str, file_path: str):
 
 
 def _extract_job(job_id: int, pdf_path: str, vendor: str = ""):
-    """Delegate extraction to CIEDOcr and drive the job state machine.
+    """Delegate extraction to CIED Extract and drive the job state machine.
 
     States: renderable/queued → extracting → parsed | raw_only (transient) | failed (terminal)."""
-    if not ciedocr.configured() or not ciedocr.health():
-        db.set_job_status(job_id, "raw_only", error="CIEDOcr unreachable")
+    if not cied_extract.configured() or not cied_extract.health():
+        db.set_job_status(job_id, "raw_only", error="CIED Extract unreachable")
         return
 
     db.set_job_status(job_id, "extracting")
     try:
-        envelope = ciedocr.extract(pdf_path, vendor)
-    except ciedocr.CiedocrUnavailable as e:
-        log.warning("CIEDOcr unavailable for job %d: %s — leaving raw_only", job_id, e)
+        envelope = cied_extract.extract(pdf_path, vendor)
+    except cied_extract.CiedExtractUnavailable as e:
+        log.warning("CIED Extract unavailable for job %d: %s — leaving raw_only", job_id, e)
         db.set_job_status(job_id, "raw_only", error=str(e))
         return
-    except ciedocr.CiedocrError as e:
-        log.error("CIEDOcr could not extract job %d: %s", job_id, e)
+    except cied_extract.CiedExtractError as e:
+        log.error("CIED Extract could not extract job %d: %s", job_id, e)
         db.set_job_status(job_id, "failed", error=str(e))
         return
 
-    fields = ciedocr.map_report(envelope)
+    fields = cied_extract.map_report(envelope)
     fields["extracted_at"] = datetime.now(timezone.utc).isoformat()
     try:
         db.clear_interrogations(job_id)          # idempotent (reprocess-safe)
@@ -323,7 +323,7 @@ def _extract_job(job_id: int, pdf_path: str, vendor: str = ""):
                 "patient_id":   fields.get("patient_id"),
                 "patient_name": fields.get("patient_name"),
             })
-        log.info("CIEDOcr extracted job %d → interrogation %d (engine %s %s)",
+        log.info("CIED Extract extracted job %d → interrogation %d (engine %s %s)",
                  job_id, interr_id, fields.get("engine_name"), fields.get("engine_version"))
     except Exception as e:
         log.error("DB insert failed for job %d: %s", job_id, e)
@@ -442,7 +442,7 @@ async def upload_file(
     if not body:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    # Option C: documents (PDF/PS) go to CIEDOcr; only non-document structured
+    # Option C: documents (PDF/PS) go to CIED Extract; only non-document structured
     # files (HL7/logs/etc.) use the legacy export parsers.
     is_export = ext not in (".pdf", ".ps")
 

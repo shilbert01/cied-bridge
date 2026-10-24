@@ -2,7 +2,7 @@
 Local PS/PCL→PDF rendering.
 
 Every ingested print job gets a viewable PDF *independent of extraction*, so the
-dashboard can always show the document even when CIEDOcr is unreachable.
+dashboard can always show the document even when CIED Extract is unreachable.
 Export-route jobs already arrive as PDF and skip this.
 
 Format detection:

@@ -18,7 +18,7 @@ def init(db_path: str):
 
 
 def _migrate(conn: sqlite3.Connection):
-    """Additive, idempotent migrations for the CIEDOcr integration (Option C)."""
+    """Additive, idempotent migrations for the CIED Extract integration (Option C)."""
     def columns(table: str) -> set:
         return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -211,7 +211,7 @@ def mark_job_parsed(job_id: int, pdf_path: str | None = None, error: str | None 
         )
 
 
-# ── CIEDOcr job state machine (Option C) ──────────────────────────────────────
+# ── CIED Extract job state machine (Option C) ────────────────────────────────
 # status ∈ received | renderable | queued | extracting | parsed | raw_only | failed
 def set_job_status(job_id: int, status: str,
                    render_pdf_path: str | None = None, error: str | None = None):
@@ -229,7 +229,7 @@ def set_job_status(job_id: int, status: str,
 
 
 def get_jobs_for_retry() -> list[dict]:
-    """Jobs stuck without a reachable parser — re-queued when CIEDOcr health returns."""
+    """Jobs stuck without a reachable parser — re-queued when CIED Extract health returns."""
     with _conn() as conn:
         rows = conn.execute(
             "SELECT id, vendor, render_pdf_path, raw_ps_path FROM jobs WHERE status='raw_only'"
@@ -389,7 +389,7 @@ _KNOWN_COLUMNS = {
     "sensing_rv", "sensing_ra",
     "threshold_ra_v", "threshold_ra_pw",
     "threshold_rv_v", "threshold_rv_pw", "threshold_lv_v", "threshold_lv_pw",
-    # CIEDOcr extraction: verbatim report + audit stamp
+    # CIED Extract: verbatim report + audit stamp
     "extract_json", "engine_name", "engine_version",
     "schema_version", "request_id", "extracted_at",
 }
