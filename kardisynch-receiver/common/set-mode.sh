@@ -3,7 +3,7 @@
 # Switch the receiver between USB gadget delivery modes.
 #
 #   set-mode.sh hid            HID pipe + companion app       (vendor-HID allowed)
-#   set-mode.sh serial         CDC-ACM serial + companion app (Herzzentrum Leipzig)
+#   set-mode.sh serial         CDC-ACM serial + companion app (locked-down PCs)
 #   set-mode.sh mass-storage   fake USB drive (import-relay)  (unrestricted-USB sites)
 #
 # Only one gadget can own the single OTG port at a time, so switching tears the

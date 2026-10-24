@@ -5,7 +5,7 @@
 # Stable name this presenter claims under at the hub. Files POSTed with a
 # matching X-Target-Node are delivered only to this node; unaddressed files go
 # to any presenter. Keep it unique per receiver.
-NODE_ID=hid-leipzig-01
+NODE_ID=hid-clinic-01
 
 # The import hub (import-relay/pi3-server/import-server.py). On the fleet this
 # is the Pi3 clinic server. Confirm per-site whether the hub is the central box

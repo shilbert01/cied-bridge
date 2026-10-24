@@ -15,7 +15,7 @@
 # Idempotent: safe to re-run (updates payload, re-enables services).
 #
 # Config (env-overridable):
-#     NODE_ID         hid-leipzig-01      this presenter's hub node id
+#     NODE_ID         hid-clinic-01       this presenter's hub node id
 #     HUB_URL         http://10.99.0.1:8090
 #     CONFIGURE_WIFI  0                   set 1 to write the relayap connection here
 #     WIFI_SSID       relayap
@@ -25,7 +25,7 @@ set -euo pipefail
 
 MODE="${1:-hid}"
 
-NODE_ID="${NODE_ID:-hid-leipzig-01}"
+NODE_ID="${NODE_ID:-hid-clinic-01}"
 HUB_URL="${HUB_URL:-http://10.99.0.1:8090}"
 CONFIGURE_WIFI="${CONFIGURE_WIFI:-0}"
 WIFI_SSID="${WIFI_SSID:-relayap}"

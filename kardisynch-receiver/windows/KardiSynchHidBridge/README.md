@@ -6,7 +6,7 @@ ACKs each file back to the Pi so delivery is reliable (unacked files are
 redelivered by the hub).
 
 Runs on locked-down clinical PCs where USB **mass-storage and USB-NIC are
-blocked but HID is allowed** (e.g. Herzzentrum Leipzig). No driver install —
+blocked but HID is allowed**. No driver install —
 Windows' built-in HID class driver is used via [HidSharp](https://www.nuget.org/packages/HidSharp).
 
 ## Build

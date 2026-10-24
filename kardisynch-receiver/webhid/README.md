@@ -3,8 +3,7 @@
 A single self-contained web page (`index.html`) that does what the native
 `../windows/KardiSynchHidBridge` app does, but with **zero install** — it runs in
 Edge/Chrome using the browser's **WebHID** + **File System Access** APIs. This is
-the companion for sites where nothing can be installed on the PC (e.g. Herzzentrum
-Leipzig).
+the companion for sites where nothing can be installed on the PC.
 
 It reassembles the file stream from the Pi Zero HID receiver
 (`../hid/hid_sender.py`) and writes each file into a folder KardiSynch watches,

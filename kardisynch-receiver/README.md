@@ -9,15 +9,16 @@ the server on the network.
  central server            Pi3 (import hub)           receiver Pi Zero W          Windows PC
  /data/kardisynch-outbox ─▶ import-server.py  ◀─claim/fetch/ack─ presenter ─USB─▶ KardiSynch
  (outbox-to-hub.py POSTs)   durable queue                 │                        (folder watch)
-                                                    HID *or* mass-storage
+                                                    HID, serial, or mass-storage
 ```
 
-Two delivery modes, chosen by the target PC's USB policy:
+Three delivery modes, chosen by the target PC's USB policy:
 
 | Mode | When | How | Code |
 |------|------|-----|------|
-| **HID** | mass-storage + USB-NIC blocked, HID allowed (e.g. **Herzzentrum Leipzig**) | 64-byte HID report stream + Windows companion app, ACK-gated | `hid/` + `windows/` (this subproject) |
-| **mass-storage** | USB unrestricted (colleague's hospital) | fake USB drive, media-change cycle | **reuses [`import-relay/`](../import-relay/)** — see `mass-storage/` |
+| **serial** | most reliable; works on nearly all PCs | CDC-ACM virtual COM port + Windows companion app | `serial/` + `windows/KardiSynchSerialBridge/` |
+| **HID** | mass-storage + USB-NIC blocked, HID allowed | 64-byte HID report stream + Windows companion app, ACK-gated | `hid/` + `windows/KardiSynchHidBridge/` |
+| **mass-storage** | USB unrestricted | fake USB drive, media-change cycle | **reuses [`import-relay/`](../import-relay/)** — see `mass-storage/` |
 
 RNDIS/USB-Ethernet (doc Scenario 1a) is **not built** — no site needs it. Full
 background + all three scenarios: [`../kardisynch-receiver-implementation.md`](../kardisynch-receiver-implementation.md).
@@ -41,9 +42,11 @@ scripts to the Buildroot fleet is deferred until HID graduates to deployment.
 ## Layout
 
 ```
-common/    setup-otg.sh (dwc2+libcomposite) · receiver.conf.example · set-mode.sh (hid|mass-storage)
-hid/       gadget-hid.sh · hid_sender.py · two systemd units
-windows/   KardiSynchHidBridge/  (C#/HidSharp companion app)
+common/        setup-otg.sh (dwc2+libcomposite) · receiver.conf.example · set-mode.sh
+serial/        gadget-serial.sh · serial_sender.py · two systemd units
+hid/           gadget-hid.sh · hid_sender.py · two systemd units
+windows/       KardiSynchSerialBridge/  (C# CDC-ACM companion app)
+               KardiSynchHidBridge/     (C#/HidSharp companion app)
 mass-storage/  README.md  (deploy notes — reuses import-relay presenter unchanged)
 server-feed/   outbox-to-hub.py · outbox-to-hub.service  (feeds the hub from the outbox)
 ```
@@ -67,7 +70,7 @@ sudo reboot                                    # first time only (dwc2)
 Override node/hub if needed:
 
 ```sh
-sudo NODE_ID=hid-leipzig-01 HUB_URL=http://10.99.0.1:8090 \
+sudo NODE_ID=hid-clinic-01 HUB_URL=http://10.99.0.1:8090 \
      bash kardisynch-receiver/install-receiver.sh hid
 ```
 
@@ -95,7 +98,7 @@ curl http://10.99.0.1:8090/                     # pending=N inflight=M
 
 # inject a test file for a specific receiver
 curl -sS -X POST http://10.99.0.1:8090/submit \
-     -H "X-File-Name: test.pdf" -H "X-Target-Node: hid-leipzig-01" \
+     -H "X-File-Name: test.pdf" -H "X-Target-Node: hid-clinic-01" \
      --data-binary @test.pdf
 
 # expect: file appears in C:\KardiSynch\incoming (CRC OK), hub goes pending->0
@@ -105,6 +108,6 @@ curl -sS -X POST http://10.99.0.1:8090/submit \
 `inflight` → after the hub lease (`IMPORT_LEASE_SECS`, default 120 s) it requeues
 and redelivers on the next poll.
 
-**The go/no-go (Leipzig):** run the companion app on the *actual* locked-down PC;
-confirm the HID device enumerates under their policy and a real interrogation file
-reaches KardiSynch's folder unchanged.
+**The go/no-go:** run the companion app on the *actual* locked-down PC;
+confirm the HID device enumerates under the site's USB policy and a real
+interrogation file reaches KardiSynch's folder unchanged.

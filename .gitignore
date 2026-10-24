@@ -20,3 +20,11 @@ printer-relay/pico2w/.pio/
 **/obj/
 **/publish/
 **/publish-single/
+
+# Local documents (not part of the project)
+pacemaker-central-website.html
+Pacemaker-Central.pdf
+Pacemaker-Central-EN.pdf
+PacemakerPrintCapture_ROI_Executive_Summary.docx
+PacemakerPrintCapture_ROI_Executive_Summary.pdf
+Wartungsvertrag_PacemakerPrinter.docx

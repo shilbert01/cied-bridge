@@ -2,7 +2,7 @@
 #
 # Bring up a vendor-defined USB HID gadget on the Pi Zero's OTG port.
 #
-# HID is chosen because locked-down clinical PCs (e.g. Herzzentrum Leipzig) block
+# HID is chosen because locked-down clinical PCs block
 # USB mass-storage and USB-NIC at the endpoint but must allow HID (keyboards/mice
 # always work). We abuse a generic 64-byte HID pipe as a one-way file transport;
 # a small Windows companion app reassembles the reports (see ../windows/).

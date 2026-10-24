@@ -52,9 +52,9 @@ cat <<DONE
   Status:   curl http://127.0.0.1:${PORT}/                 # -> pending=N inflight=M
   Senders POST to:  http://${IP:-<pi3-ip>}:${PORT}/submit
 
-  A presenter (e.g. the HID receiver, node hid-leipzig-01) will now be able to
+  A presenter (e.g. the HID receiver, node hid-clinic-01) will now be able to
   claim/fetch/ack. Test-inject a file from any box on the network:
     curl -sS -X POST http://${IP:-<pi3-ip>}:${PORT}/submit \\
-         -H "X-File-Name: test.pdf" -H "X-Target-Node: hid-leipzig-01" \\
+         -H "X-File-Name: test.pdf" -H "X-Target-Node: hid-clinic-01" \\
          --data-binary @test.pdf
 DONE

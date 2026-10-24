@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 # Runs where /data/kardisynch-outbox lives (the central server). If the import
 # hub is co-located, set HUB_URL=http://127.0.0.1:8090. Pin a receiver with
-# TARGET_NODE to match its NODE_ID (e.g. hid-leipzig-01).
+# TARGET_NODE to match its NODE_ID (e.g. hid-clinic-01).
 Environment=OUTBOX_DIR=/data/kardisynch-outbox
 Environment=HUB_URL=http://10.99.0.1:8090
 Environment=TARGET_NODE=

@@ -2,7 +2,7 @@
 #
 # Bring up a USB CDC-ACM (serial port) gadget on the Pi Zero's OTG port.
 #
-# CDC-ACM is chosen because locked-down clinical PCs (e.g. Herzzentrum Leipzig)
+# CDC-ACM is chosen because locked-down clinical PCs
 # block USB mass-storage AND vendor-HID at the endpoint protection level, but
 # allow serial/COM port devices — medical equipment commonly uses serial.
 #
