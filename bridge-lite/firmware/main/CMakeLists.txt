@@ -1,0 +1,23 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "wifi_transport.c"
+        "sd_storage.c"
+        "usb_msc_device.c"
+        "usb_host_msc.c"
+        "led_status.c"
+        "status_lcd.c"
+        "file_protocol.c"
+    INCLUDE_DIRS "."
+    PRIV_REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_netif
+        lwip
+        fatfs
+        driver
+        esp_timer
+        mbedtls
+        sdmmc
+        esp_lcd
+)

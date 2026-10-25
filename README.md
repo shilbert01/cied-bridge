@@ -28,6 +28,8 @@ Cardiac device clinics still rely on thermal printouts taped into paper charts o
 
 **CIED Extract** — an optional LAN service that parses captured PDFs into structured fields using OCR and VQA. Runs on a separate GPU-equipped machine; the hub falls back to raw-PDF display when it is unavailable.
 
+**[CIED Bridge Lite](bridge-lite/)** — a zero-infrastructure variant for small clinics. Two ESP32-S3 dongles (T-Dongle-S3) relay file exports directly from programmer to office PC over WiFi — no server, no network, under 30 EUR total. Covers the file export pathway only (PDF/XML); for print capture or structured extraction, use the full system above.
+
 **CIED Studio** — the clinician's desktop application (Electron). Consumes structured data files delivered via USB relay or Samba share. Its built-in parsers cover HL7, XML, and vendor-proprietary formats; CIED Extract augments them for raster-only PDFs.
 
 ### Supported vendors
@@ -50,6 +52,7 @@ edge-node/              Pi Zero W USB gadget, capture daemon, forwarder
 export-relay/           Ingest-storage relay (Pi Zero mass-storage gadget)
 import-relay/           Delivery-storage relay + hub queue server
 kardisynch-receiver/    Delivery-HID relay + Windows bridge apps (C#)
+bridge-lite/            CIED Bridge Lite — serverless WiFi file relay (ESP32-S3)
 central-server/         CIED Central — data hub API + dashboard (Python/FastAPI)
 tools/                  Deployment, provisioning, and diagnostic scripts
 docs/                   Architecture docs, integration specs

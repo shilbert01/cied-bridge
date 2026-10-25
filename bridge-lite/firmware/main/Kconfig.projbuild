@@ -1,0 +1,38 @@
+menu "CIED Bridge Lite"
+
+    choice BRIDGE_LITE_ROLE
+        prompt "Device role"
+        default BRIDGE_LITE_ROLE_SENDER
+        help
+            Select whether this dongle is a sender (plugs into programmer)
+            or receiver (plugs into office PC).
+
+        config BRIDGE_LITE_ROLE_SENDER
+            bool "Sender (capture from programmer)"
+        config BRIDGE_LITE_ROLE_RECEIVER
+            bool "Receiver (present to office PC)"
+    endchoice
+
+    config BRIDGE_LITE_SENDER_ID
+        string "Sender bay ID"
+        default "bay1"
+        depends on BRIDGE_LITE_ROLE_SENDER
+        help
+            Short identifier prepended to filenames (e.g. bay1, bay2).
+            Keep it short — it becomes part of the filename on the receiver.
+
+    config BRIDGE_LITE_WIFI_SSID
+        string "WiFi SSID"
+        default "CIED-Bridge"
+        help
+            Receiver runs a SoftAP with this SSID.
+            Sender connects to it as a station.
+
+    config BRIDGE_LITE_WIFI_PASS
+        string "WiFi password"
+        default "cied-bridge-lite"
+        help
+            WPA2 password for the bridge WiFi link.
+            Must be identical on sender and receiver.
+
+endmenu
