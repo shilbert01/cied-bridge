@@ -35,6 +35,7 @@ esp_err_t      sd_list_files(const char *dir, void (*cb)(const char *name, uint3
 esp_err_t      sd_read_file(const char *path, uint8_t *buf, size_t buf_len, size_t *out_len);
 esp_err_t      sd_delete_file(const char *path);
 bool           sd_ready(void);
+esp_err_t      sd_set_volume_label(const char *label);
 
 // --- WiFi transport ---
 
@@ -60,7 +61,7 @@ void      usb_msc_release_to_host(void);
 
 // --- USB host MSC (sender: capture from programmer) ---
 
-esp_err_t usb_host_msc_init(void);
+esp_err_t  usb_host_msc_init(void);
 
 // --- File protocol (orchestration) ---
 

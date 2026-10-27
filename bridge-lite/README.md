@@ -21,11 +21,11 @@ infrastructure — no server, no network, no IT involvement.
 **Sender** — plugs into the programmer's USB port. The programmer sees a FAT32 USB
 drive ("CIED Sender") and writes PDF/XML file exports to it. After copying, press the
 BOOT button on the dongle — it scans the card, transmits files over WiFi to the
-receiver, and moves them to the `done/` folder.
+receiver, and deletes them from the card.
 
 **Receiver** — plugs into the office PC's USB port. The PC sees a FAT32 USB drive
-("CIED Receiver"). Received files appear in the `inbox/` folder, tagged with sender ID
-(`bay1-report.pdf`). Staff open the drive and grab the PDF.
+("CIED Receiver"). Received files appear in the `inbox/` folder with their original
+filenames. Staff open the drive and grab the PDF.
 
 ## Key properties
 
@@ -85,7 +85,7 @@ The sender and receiver share one codebase; the role is selected at build time v
 2. Plug the **sender** into the programmer — it shows as "CIED Sender" USB drive
 3. Export a PDF/XML from the programmer (it writes to the sender drive)
 4. Press the **BOOT button** on the sender dongle
-5. The file transfers over WiFi; it appears in the receiver's `inbox/` folder
+5. Files transfer over WiFi and appear in the receiver's `inbox/` folder
 
 ## Protocol
 
@@ -97,7 +97,7 @@ Wire format per file:
 | Field | Size | Description |
 |-------|------|-------------|
 | name_len | 2 bytes | Filename length (big-endian) |
-| name | variable | Filename (prefixed with sender ID) |
+| name | variable | Original filename from programmer |
 | file_size | 4 bytes | File size (big-endian) |
 | sha256 | 32 bytes | SHA-256 of the file |
 | data | file_size | Raw file data (streamed in 4 KB chunks) |
@@ -135,9 +135,9 @@ Build-time options in `menuconfig → CIED Bridge Lite`:
 | Option | Default | Description |
 |--------|---------|-------------|
 | Role | Sender | Sender or Receiver |
-| Sender bay ID | bay1 | Prefixed to filenames on the receiver |
+| Sender bay ID | bay1 | Identifies the sender in logs |
 | WiFi SSID | CIED-Bridge | AP name (must match on both) |
-| WiFi password | cied-bridge-lite | WPA2 password (must match on both) |
+| WiFi password | cied-bridge-lite | WPA3 password (must match on both) |
 
 ## Relationship to CIED Bridge
 

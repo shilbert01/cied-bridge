@@ -3,6 +3,7 @@
 // VFS mount/unmount is owned by tinyusb_msc_storage.
 
 #include <string.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include "freertos/FreeRTOS.h"
@@ -97,6 +98,80 @@ retry:
 
     sdmmc_card_print_info(stdout, s_card);
     ESP_LOGI(TAG, "SD card ready (VFS not mounted — owned by MSC storage)");
+    return ESP_OK;
+}
+
+esp_err_t sd_set_volume_label(const char *label)
+{
+    if (!s_card) return ESP_FAIL;
+
+    uint8_t *buf = (uint8_t *)malloc(512);
+    if (!buf) return ESP_ERR_NO_MEM;
+
+    char padded[11];
+    memset(padded, ' ', 11);
+    size_t len = strlen(label);
+    if (len > 11) len = 11;
+    for (size_t i = 0; i < len; i++)
+        padded[i] = toupper((unsigned char)label[i]);
+
+    esp_err_t ret = sdmmc_read_sectors(s_card, buf, 0, 1);
+    if (ret != ESP_OK) { free(buf); return ret; }
+
+    uint32_t part_start = 0;
+    if (buf[510] == 0x55 && buf[511] == 0xAA &&
+        memcmp(buf + 82, "FAT32", 5) != 0) {
+        part_start = (uint32_t)buf[454] | ((uint32_t)buf[455] << 8) |
+                     ((uint32_t)buf[456] << 16) | ((uint32_t)buf[457] << 24);
+        ret = sdmmc_read_sectors(s_card, buf, part_start, 1);
+        if (ret != ESP_OK) { free(buf); return ret; }
+    }
+
+    if (memcmp(buf + 82, "FAT32", 5) != 0) {
+        ESP_LOGW(TAG, "not FAT32 — volume label not set");
+        free(buf);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    uint16_t rsvd = buf[14] | ((uint16_t)buf[15] << 8);
+    uint8_t  nfats = buf[16];
+    uint32_t fatsz = buf[36] | ((uint32_t)buf[37] << 8) |
+                     ((uint32_t)buf[38] << 16) | ((uint32_t)buf[39] << 24);
+    uint32_t root_clus = buf[44] | ((uint32_t)buf[45] << 8) |
+                         ((uint32_t)buf[46] << 16) | ((uint32_t)buf[47] << 24);
+    uint8_t  spc = buf[13];
+
+    memcpy(buf + 71, padded, 11);
+    sdmmc_write_sectors(s_card, buf, part_start, 1);
+
+    uint32_t data_start = part_start + rsvd + (nfats * fatsz);
+    uint32_t root_sec = data_start + (root_clus - 2) * spc;
+
+    ret = sdmmc_read_sectors(s_card, buf, root_sec, 1);
+    if (ret != ESP_OK) { free(buf); return ret; }
+
+    int slot = -1;
+    for (int i = 0; i < 16; i++) {
+        uint8_t *ent = buf + i * 32;
+        if (ent[0] == 0x00 || ent[0] == 0xE5) {
+            if (slot < 0) slot = i;
+            if (ent[0] == 0x00) break;
+        } else if (ent[11] == 0x08) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot >= 0) {
+        uint8_t *ent = buf + slot * 32;
+        memset(ent, 0, 32);
+        memcpy(ent, padded, 11);
+        ent[11] = 0x08;
+        sdmmc_write_sectors(s_card, buf, root_sec, 1);
+        ESP_LOGI(TAG, "volume label set: %.11s", padded);
+    }
+
+    free(buf);
     return ESP_OK;
 }
 

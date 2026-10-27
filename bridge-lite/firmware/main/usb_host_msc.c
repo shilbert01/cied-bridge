@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Sender USB: present SD card as a FAT32 USB drive to the programmer.
-// Uses tinyusb_msc_storage for VFS mount/unmount toggling.
+// During file transfer, VFS is mounted locally (host sees BECOMING_READY).
+// After transfer, UNIT_ATTENTION tells the host to re-read the filesystem.
 
 #include <string.h>
 #include <sys/stat.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "tinyusb.h"
 #include "tusb_msc_storage.h"
 #include "esp_log.h"
@@ -16,12 +19,10 @@ static const char *TAG = "usb-ingest";
 static void msc_mount_changed_cb(tinyusb_msc_event_t *event)
 {
     if (event->mount_changed_data.is_mounted) {
-        ESP_LOGI(TAG, "VFS mounted (programmer ejected or local mount)");
+        ESP_LOGI(TAG, "VFS mounted (local access)");
         sd_set_vfs_mounted(true);
-        mkdir("/sd/done", 0775);
-        led_set(LED_GREEN_FLASH);
     } else {
-        ESP_LOGI(TAG, "VFS unmounted (USB host has card access)");
+        ESP_LOGI(TAG, "VFS unmounted (USB host access)");
         sd_set_vfs_mounted(false);
     }
 }
@@ -46,10 +47,8 @@ esp_err_t usb_host_msc_init(void)
     ESP_ERROR_CHECK(tinyusb_msc_storage_init_sdmmc(&sdmmc_cfg));
 
     tinyusb_msc_storage_mount(SD_MOUNT);
-    sd_set_vfs_mounted(true);
     mkdir("/sd/done", 0775);
     tinyusb_msc_storage_unmount();
-    sd_set_vfs_mounted(false);
 
     static const char *str_desc[] = {
         "",
@@ -70,22 +69,22 @@ esp_err_t usb_host_msc_init(void)
     return ESP_OK;
 }
 
-// Called by sender_task after sending all files: release VFS back to USB
-void usb_msc_release_to_host(void)
-{
-    tinyusb_msc_storage_unmount();
-    sd_set_vfs_mounted(false);
-    ESP_LOGI(TAG, "VFS released to USB host");
-}
-
-// Called by sender_task before scanning: claim VFS for local reads
 esp_err_t usb_msc_claim_for_local(void)
 {
     esp_err_t ret = tinyusb_msc_storage_mount(SD_MOUNT);
-    if (ret == ESP_OK) {
-        sd_set_vfs_mounted(true);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "VFS mount failed (0x%x)", ret);
     }
     return ret;
+}
+
+void usb_msc_release_to_host(void)
+{
+    tinyusb_msc_storage_unmount();
+    tud_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(500));
+    tud_connect();
+    ESP_LOGI(TAG, "VFS released — USB reconnected, host will re-mount");
 }
 
 #endif

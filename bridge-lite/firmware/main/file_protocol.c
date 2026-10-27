@@ -82,9 +82,7 @@ static esp_err_t send_file(const char *filepath, const char *filename)
     mbedtls_sha256_free(&sha_ctx);
     fseek(f, 0, SEEK_SET);
 
-    char tagged[MAX_FILENAME_LEN];
-    snprintf(tagged, sizeof(tagged), "%s-%s", CONFIG_BRIDGE_LITE_SENDER_ID, filename);
-    uint16_t name_len = strlen(tagged);
+    uint16_t name_len = strlen(filename);
 
     int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock < 0) { fclose(f); return ESP_FAIL; }
@@ -107,7 +105,7 @@ static esp_err_t send_file(const char *filepath, const char *filename)
 
     uint8_t hdr[2] = { name_len >> 8, name_len & 0xFF };
     send_all(sock, hdr, 2);
-    send_all(sock, tagged, name_len);
+    send_all(sock, filename, name_len);
     uint8_t size_buf[4] = { total >> 24, total >> 16, total >> 8, total };
     send_all(sock, size_buf, 4);
     send_all(sock, sha256, SHA256_LEN);
@@ -130,13 +128,13 @@ static esp_err_t send_file(const char *filepath, const char *filename)
     if (result == 0x01) {
         led_set(LED_GREEN_FLASH);
         lcd_update("CIED Bridge", "SENDER", filename, "sent OK");
-        ESP_LOGI(TAG, "sent %s (%lu bytes)", tagged, (unsigned long)total);
+        ESP_LOGI(TAG, "sent %s (%lu bytes)", filename, (unsigned long)total);
         vTaskDelay(pdMS_TO_TICKS(1000));
         led_set(LED_GREEN_STEADY);
         return ESP_OK;
     }
 
-    ESP_LOGW(TAG, "receiver rejected %s", tagged);
+    ESP_LOGW(TAG, "receiver rejected %s", filename);
     led_set(LED_RED_STEADY);
     lcd_update("CIED Bridge", "SENDER", filename, "REJECTED");
     return ESP_FAIL;
@@ -180,6 +178,8 @@ static void sender_task(void *arg)
             continue;
         }
 
+        mkdir("/sd/done", 0775);
+
         bool sent_any = false;
         int count = 0;
         DIR *d = opendir("/sd");
@@ -188,12 +188,14 @@ static void sender_task(void *arg)
             while ((ent = readdir(d)) != NULL) {
                 if (ent->d_type != DT_REG) continue;
                 if (!is_export_file(ent->d_name)) continue;
-                char src[280], dst[280];
+                char src[280];
                 snprintf(src, sizeof(src), "/sd/%s", ent->d_name);
-                snprintf(dst, sizeof(dst), "/sd/done/%s", ent->d_name);
 
                 if (send_file(src, ent->d_name) == ESP_OK) {
-                    rename(src, dst);
+                    char dst[280];
+                    snprintf(dst, sizeof(dst), "/sd/done/%s", ent->d_name);
+                    if (rename(src, dst) != 0)
+                        ESP_LOGW(TAG, "could not move %s to done/", src);
                     sent_any = true;
                     count++;
                 }

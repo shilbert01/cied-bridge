@@ -30,5 +30,8 @@ PacemakerPrintCapture_ROI_Executive_Summary.pdf
 Wartungsvertrag_PacemakerPrinter.docx
 docs/linkedin-announcement.md
 
+# Cross-compiled test binaries
+*.exe
+
 # Photos (hardware bench shots, not docs)
 photo_*.jpg

@@ -9,6 +9,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Rebrand pacemaker-* → cied-* across all source code, config paths, service names, and UI strings (48 files)
 - Rename CiedOCR references → CIED Extract (module, env vars, classes, docs)
 
+## [1.8.0] — 2026-10-27
+
+### Added
+- No-eject USB: patched esp_tinyusb managed component so host never loses the drive during file transfer (BECOMING_READY SCSI sense while VFS is locally mounted, UNIT_ATTENTION after release)
+- Soft USB reconnect (`tud_disconnect`/`tud_connect`) forces host to re-mount with fresh FAT — only reliable way to surface new files through a mounted FAT cache
+- Synchronous `tud_msc_write10_cb` replaces deferred single-buffer writes — fixes data loss when host sends rapid consecutive WRITE10 commands (e.g. Windows Explorer file deletion)
+- FAT32 volume label writer (`sd_set_volume_label`) — cards identify as "CIED Sender" / "CIED Receiver" in OS file manager
+- Managed component patch script (`patches/apply-msc-no-eject.sh`) — re-applies all esp_tinyusb changes after `idf.py fullclean`
+- Windows test tools (`test_send.go`, `test_receive.go`) — auto-detect dongles by volume label, write dummy files and monitor inbox
+
+### Changed
+- WiFi upgraded from WPA2 to WPA3-SAE on both AP (receiver) and STA (sender)
+- Sender preserves original filenames instead of prefixing with bay ID
+- Sender creates `done/` directory before each scan to prevent rename failures on fresh cards
+
+### Fixed
+- Transfer hang: `_msc_storage_read_sector` was missing `is_fat_mounted` guard — USB host READ10 hit SDMMC concurrently with FatFS
+- Files deleted via Windows Explorer reappeared with 0 bytes due to deferred write buffer being overwritten by a second WRITE10 before the first completed
+- Sent files re-transferred on next BOOT press because `done/` directory did not exist on card
+
+## [1.7.0] — 2026-10-24
+
+### Added
+- CIED Bridge Lite: serverless WiFi file relay for small clinics using two T-Dongle-S3 USB dongles
+- ESP-NOW replaced by TCP/WiFi transport with SHA-256 integrity verification
+- Sender: BOOT button triggers scan-and-send; files moved to `done/` after transfer
+- Receiver: SoftAP + TCP server; received files written to `inbox/` folder
+- APA102 LED status (green=ready, blue=transferring, red=error) and ST7735S LCD display
+- SDMMC 4-bit SD card interface with automatic FAT32 formatting
+
 ## [1.6.0] — 2026-10-17
 
 ### Added

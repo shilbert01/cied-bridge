@@ -27,7 +27,8 @@ esp_err_t wifi_transport_init(void)
     strncpy((char *)ap_cfg.ap.password, CONFIG_BRIDGE_LITE_WIFI_PASS, sizeof(ap_cfg.ap.password));
     ap_cfg.ap.channel = 1;
     ap_cfg.ap.max_connection = 4;
-    ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    ap_cfg.ap.authmode = WIFI_AUTH_WPA3_PSK;
+    ap_cfg.ap.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
@@ -71,6 +72,8 @@ esp_err_t wifi_transport_init(void)
     wifi_config_t sta_cfg = {};
     strncpy((char *)sta_cfg.sta.ssid, CONFIG_BRIDGE_LITE_WIFI_SSID, sizeof(sta_cfg.sta.ssid));
     strncpy((char *)sta_cfg.sta.password, CONFIG_BRIDGE_LITE_WIFI_PASS, sizeof(sta_cfg.sta.password));
+    sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA3_PSK;
+    sta_cfg.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));

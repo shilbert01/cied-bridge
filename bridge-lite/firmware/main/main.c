@@ -32,6 +32,14 @@ void app_main(void)
         ESP_LOGW(TAG, "SD not ready (%s) — insert TF card and reboot", esp_err_to_name(ret));
     }
 
+    if (sd_get_card()) {
+#ifdef CONFIG_BRIDGE_LITE_ROLE_SENDER
+        sd_set_volume_label("CIED Sender");
+#else
+        sd_set_volume_label("CIED Receiver");
+#endif
+    }
+
     ESP_ERROR_CHECK(wifi_transport_init());
 
 #ifdef CONFIG_BRIDGE_LITE_ROLE_SENDER
@@ -54,7 +62,6 @@ void app_main(void)
     ESP_ERROR_CHECK(file_receiver_init());
 #endif
 
-    const char *sd_str = sd_get_card() ? "SD OK" : "no SD";
     if (sd_get_card()) {
         led_set(LED_GREEN_STEADY);
     }
@@ -63,7 +70,8 @@ void app_main(void)
     lcd_update("CIED Bridge", "SENDER", CONFIG_BRIDGE_LITE_SENDER_ID,
                sd_get_card() ? "press BTN" : "no SD");
 #else
-    lcd_update("CIED Bridge", "RECEIVER", sd_str, "listening");
+    lcd_update("CIED Bridge", "RECEIVER",
+               sd_get_card() ? "SD OK" : "no SD", "listening");
 #endif
     ESP_LOGI(TAG, "ready (sd=%s)", sd_get_card() ? "OK" : "FAIL");
 }

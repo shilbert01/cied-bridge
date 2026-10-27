@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Receiver USB: present SD card as a FAT32 USB drive to the office PC.
-// Files received over ESP-NOW are written via VFS; PC sees them on refresh.
+// During file reception, VFS is mounted locally (host sees BECOMING_READY).
+// After reception, a soft USB reconnect forces the host to re-mount and
+// read a fresh filesystem — the only reliable way to surface new files
+// through a mounted FAT cache.
 
 #include <string.h>
 #include <sys/stat.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "tinyusb.h"
 #include "tusb_msc_storage.h"
 #include "esp_log.h"
@@ -16,7 +21,7 @@ static const char *TAG = "usb-present";
 static void msc_mount_changed_cb(tinyusb_msc_event_t *event)
 {
     if (event->mount_changed_data.is_mounted) {
-        ESP_LOGI(TAG, "VFS mounted (local write access)");
+        ESP_LOGI(TAG, "VFS mounted (local access)");
         sd_set_vfs_mounted(true);
     } else {
         ESP_LOGI(TAG, "VFS unmounted (USB host access)");
@@ -43,12 +48,9 @@ esp_err_t usb_msc_device_init(void)
     };
     ESP_ERROR_CHECK(tinyusb_msc_storage_init_sdmmc(&sdmmc_cfg));
 
-    // Mount VFS to create dirs, then unmount so PC sees the drive
     tinyusb_msc_storage_mount(SD_MOUNT);
-    sd_set_vfs_mounted(true);
     mkdir("/sd/inbox", 0775);
     tinyusb_msc_storage_unmount();
-    sd_set_vfs_mounted(false);
 
     static const char *str_desc[] = {
         "",
@@ -69,19 +71,22 @@ esp_err_t usb_msc_device_init(void)
     return ESP_OK;
 }
 
-// Claim VFS for writing an incoming ESP-NOW file
 esp_err_t usb_msc_claim_for_local(void)
 {
     esp_err_t ret = tinyusb_msc_storage_mount(SD_MOUNT);
-    if (ret == ESP_OK) sd_set_vfs_mounted(true);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "VFS mount failed (0x%x)", ret);
+    }
     return ret;
 }
 
-// Release VFS back to USB host after writing
 void usb_msc_release_to_host(void)
 {
     tinyusb_msc_storage_unmount();
-    sd_set_vfs_mounted(false);
+    tud_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(500));
+    tud_connect();
+    ESP_LOGI(TAG, "VFS released — USB reconnected, host will re-mount");
 }
 
 #endif
